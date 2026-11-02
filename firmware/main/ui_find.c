@@ -122,7 +122,7 @@ void tt_grid_fill(tt_grid_t *g, int teacher)
 
             bool now = is_today && p == cur;
             lv_obj_set_style_bg_opa(c, msg ? LV_OPA_TRANSP : has ? LV_OPA_COVER : LV_OPA_30, 0);
-            lv_obj_set_style_bg_color(c, lv_color_hex(now ? 0x1E4D3F : has ? C_CARD2 : C_CARD), 0);
+            lv_obj_set_style_bg_color(c, lv_color_hex(now ? 0x24624E : has ? C_CARD2 : C_CARD), 0);
             lv_obj_set_style_border_color(c, lv_color_hex(now ? C_GREEN : is_today && has ? 0x3E8F77 : C_LINE), 0);
             lv_obj_set_style_border_width(c, now ? 3 : 1, 0);
             lv_obj_set_style_opa(c, holiday && !now ? LV_OPA_60 : LV_OPA_COVER, 0);

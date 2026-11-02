@@ -9,14 +9,14 @@
 #include "fonts_kr.h"
 #include "lvgl.h"
 
-#define C_BG     0x0B1220
-#define C_CARD   0x162036
-#define C_CARD2  0x1F2D4B
-#define C_LINE   0x2C3A58
-#define C_TEXT   0xE8EDF5
-#define C_DIM    0x8A97AD
-#define C_BLUE   0x5AA9FF
-#define C_ACCENT 0x2F6FE4
+#define C_BG     0x17233D
+#define C_CARD   0x223154
+#define C_CARD2  0x2F4370
+#define C_LINE   0x445A88
+#define C_TEXT   0xF4F7FC
+#define C_DIM    0xAEBBD2
+#define C_BLUE   0x6CB6FF
+#define C_ACCENT 0x3B7DF0
 #define C_WARM   0xFFB547
 #define C_GREEN  0x5BD6A0
 #define C_PINK   0xFF7A90

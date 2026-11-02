@@ -214,7 +214,7 @@ static void bar_name(void)
 static void bar_build(lv_obj_t *scr)
 {
     s_bar = mk_box(scr, 0, 0, SCR_W, BAR_H);
-    lv_obj_set_style_bg_color(s_bar, lv_color_hex(0x0F1A2E), 0);
+    lv_obj_set_style_bg_color(s_bar, lv_color_hex(0x1C2949), 0);
     lv_obj_set_style_bg_opa(s_bar, LV_OPA_COVER, 0);
     lv_obj_set_style_border_side(s_bar, LV_BORDER_SIDE_BOTTOM, 0);
     lv_obj_set_style_border_width(s_bar, 1, 0);
@@ -229,16 +229,22 @@ static void bar_build(lv_obj_t *scr)
     lv_obj_center(mk_label(s_badge, &font_kr_22, C_TEXT, ""));
 
     s_name = mk_label(s_bar, &font_kr_22, C_TEXT, "");
-    lv_obj_set_pos(s_name, 66, 19);
+    lv_obj_set_pos(s_name, 66, 20);
     lv_label_set_long_mode(s_name, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(s_name, 190);
+    lv_obj_set_width(s_name, 150);
 
-    lv_obj_t *tabs = mk_box(s_bar, 262, 8, 7 * 72 + 8, 48);
+    /* 메뉴: 글자 길이만큼 넓게, 사이를 조금씩 띄웁니다 */
+    static const int TAB_W[PG_COUNT] = { 58, 94, 94, 64, 78, 64, 64 };
+    int tw = 8;
+    for (int i = 0; i < PG_COUNT; i++) {
+        tw += TAB_W[i] + (i ? 4 : 0);
+    }
+    lv_obj_t *tabs = mk_box(s_bar, 224, 8, tw, 48);
     lv_obj_set_style_bg_color(tabs, lv_color_hex(C_CARD), 0);
     lv_obj_set_style_bg_opa(tabs, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(tabs, 12, 0);
-    for (int i = 0; i < PG_COUNT; i++) {
-        lv_obj_t *t = mk_box(tabs, 4 + i * 72, 4, 72, 40);
+    for (int i = 0, x = 4; i < PG_COUNT; x += TAB_W[i] + 4, i++) {
+        lv_obj_t *t = mk_box(tabs, x, 4, TAB_W[i], 40);
         lv_obj_set_style_radius(t, 10, 0);
         lv_obj_set_style_bg_color(t, lv_color_hex(C_ACCENT), 0);
         lv_obj_add_flag(t, LV_OBJ_FLAG_CLICKABLE);
@@ -247,12 +253,18 @@ static void bar_build(lv_obj_t *scr)
         s_tabs[i] = t;
     }
 
+    /* 오른쪽: [받은 시각 / 날짜] [시계] */
+    s_clock = mk_label(s_bar, &font_kr_36, C_TEXT, "");
+    lv_obj_align(s_clock, LV_ALIGN_RIGHT_MID, -14, 0);
     s_status = mk_label(s_bar, &font_kr_18, C_GREEN, "");
-    lv_obj_set_pos(s_status, 782, 22);
-    s_clock = mk_label(s_bar, &font_kr_26, C_TEXT, "");
-    lv_obj_align(s_clock, LV_ALIGN_TOP_RIGHT, -14, 6);
+    lv_obj_set_width(s_status, 140);
+    lv_obj_set_style_text_align(s_status, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_label_set_long_mode(s_status, LV_LABEL_LONG_CLIP);
+    lv_obj_align(s_status, LV_ALIGN_TOP_RIGHT, -116, 9);
     s_date = mk_label(s_bar, &font_kr_18, C_DIM, "");
-    lv_obj_align(s_date, LV_ALIGN_TOP_RIGHT, -14, 38);
+    lv_obj_set_width(s_date, 140);
+    lv_obj_set_style_text_align(s_date, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_align(s_date, LV_ALIGN_TOP_RIGHT, -116, 35);
     bar_name();
 }
 
@@ -291,7 +303,7 @@ static void clock_texts(char *clock, size_t cs, char *date, size_t ds)
     struct tm tm;
     localtime_r(&now, &tm);
     if (now < 1735689600) {
-        strlcpy(clock, "--:--", cs);
+        clock[0] = 0;  /* 큰 글꼴에 "-" 가 없습니다 */
         date[0] = 0;
         return;
     }
@@ -299,7 +311,7 @@ static void clock_texts(char *clock, size_t cs, char *date, size_t ds)
     if (g_cfg.h12[0] == '1') {
         h = h % 12 == 0 ? 12 : h % 12;
     }
-    snprintf(clock, cs, "%d:%02d", h, tm.tm_min);
+    snprintf(clock, cs, "%02d:%02d", h, tm.tm_min);
     snprintf(date, ds, "%d월 %d일 (%s)", tm.tm_mon + 1, tm.tm_mday, WEEKDAYS[tm.tm_wday]);
 }
 
@@ -339,6 +351,7 @@ static void tick(lv_timer_t *t)
     char clock[16], date[32];
     clock_texts(clock, sizeof(clock), date, sizeof(date));
     label_set(s_clock, clock);
+    lv_obj_align(s_clock, LV_ALIGN_RIGHT_MID, -14, 0);
     label_set(s_date, date);
 
     int today = ymd_today();
@@ -432,6 +445,8 @@ void ui_refresh(int kind)
         home_refresh(kind);
         school_refresh();
         find_refresh();
+        cha_refresh();  /* 휴일 · 동아리 같은 창체 일정 */
+        cal_refresh();
         break;
     case D_CHA:
         cha_refresh();

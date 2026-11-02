@@ -23,7 +23,8 @@ static lv_obj_t *s_w_day[6], *s_w_day_t[6];
 static lv_obj_t *s_meal, *s_meal_title, *s_meal_lunch, *s_meal_dinner;
 static lv_obj_t *s_tt_card, *s_tt_title, *s_tt_week;
 static tt_grid_t s_grid;
-static lv_obj_t *s_today, *s_today_text;
+#define TODAY_LINES 3
+static lv_obj_t *s_today, *s_today_line[TODAY_LINES];
 static lv_obj_t *s_setup;
 static int s_last_min = -1;
 
@@ -106,14 +107,17 @@ void home_build(lv_obj_t *page)
     lv_obj_t *h = mk_label(c, &font_kr_18, C_PINK, "오늘");
     lv_obj_set_pos(h, 0, 0);
     lv_obj_align(mk_link(c, "학교일정", PG_SCHOOL), LV_ALIGN_TOP_RIGHT, 0, 0);
-    s_today_text = mk_label(c, &font_kr_18, C_TEXT, "");
-    lv_obj_set_pos(s_today_text, 52, 0);
-    lv_obj_set_size(s_today_text, RIGHT_W - 30 - 52 - 96, TODAY_H - 16);
-    lv_label_set_long_mode(s_today_text, LV_LABEL_LONG_CLIP);
+    /* 한 줄에 하나씩, 넘치면 … */
+    for (int i = 0; i < TODAY_LINES; i++) {
+        s_today_line[i] = mk_label(c, &font_kr_18, C_TEXT, "");
+        lv_obj_set_pos(s_today_line[i], 52, i * 23);
+        lv_obj_set_width(s_today_line[i], RIGHT_W - 30 - 52 - 112);
+        lv_label_set_long_mode(s_today_line[i], LV_LABEL_LONG_DOT);
+    }
 
     /* 처음 설정 안내 */
     s_setup = mk_card(page, 162, 170, 700, 260);
-    lv_obj_set_style_bg_color(s_setup, lv_color_hex(0x22304F), 0);
+    lv_obj_set_style_bg_color(s_setup, lv_color_hex(0x2C3E66), 0);
     lv_obj_set_style_shadow_width(s_setup, 40, 0);
     lv_obj_t *t = mk_label(s_setup, &font_kr_26, C_WARM, "와이파이 설정이 필요합니다");
     lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 8);
@@ -167,7 +171,7 @@ static void refresh_weather(void)
         int wd = ymd_wday(ymd);
         bool holiday;
         school_day_info(ymd, &holiday);
-        snprintf(buf, sizeof(buf), "%d일(%s)", ymd % 100, WEEKDAYS[wd]);
+        snprintf(buf, sizeof(buf), "%d(%s)", ymd % 100, WEEKDAYS[wd]);
         label_set(s_w_day[i], buf);
         lv_obj_set_style_text_color(s_w_day[i], lv_color_hex(wd == 0 || holiday ? C_PINK : wd == 6 ? C_BLUE : C_DIM), 0);
         snprintf(buf, sizeof(buf), "%s\n%.0f°/%.0f°", weather_text(w->day_code[i + 1]), w->day_max[i + 1],
@@ -267,7 +271,19 @@ static void refresh_today(void)
             o += snprintf(buf + o, sizeof(buf) - o, "%s%s", o ? "\n" : "", s->sched[i].title);
         }
     }
-    label_set(s_today_text, o ? buf : (s || c) ? "오늘은 일정이 없습니다." : "학교 일정 주소를 넣으면 여기에 나옵니다.");
+    if (!o) {
+        strlcpy(buf, (s || c) ? "오늘은 일정이 없습니다." : "학교 일정 주소를 넣으면 여기에 나옵니다.", sizeof(buf));
+    }
+    char *line = buf;
+    for (int i = 0; i < TODAY_LINES; i++) {
+        char *nl = line ? strchr(line, '\n') : NULL;
+        if (nl) {
+            *nl = 0;
+        }
+        label_set(s_today_line[i], line ? line : "");
+        lv_obj_set_style_text_color(s_today_line[i], lv_color_hex(o ? C_TEXT : C_DIM), 0);
+        line = nl ? nl + 1 : NULL;
+    }
 }
 
 void home_refresh(int kind)

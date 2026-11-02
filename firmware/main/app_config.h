@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#define APP_VERSION "0.2.0"
+#define APP_VERSION "0.2.1"
 
 /* 설치 페이지·보드 설정 화면에서 정하는 값. 보드 안(NVS)에 JSON 으로 저장됩니다.
  * 모두 글자로 저장하고, 숫자는 쓸 때 atoi 로 읽습니다. */

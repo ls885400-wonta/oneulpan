@@ -1,11 +1,12 @@
 /* 설정 화면
  *
- *  ┌ 와이파이            [찾기] ┐ ┌ 화면 끄기                 [지금 받기] ┐
- *  │ 'Multi_2G' 저장됨 · 연결됨 │ │ 밤 시간  [22:00] ~ [07:00]            │
- *  │ (찾은 와이파이 목록)       │ │ 주말·휴일 [끄기] [켜 두기]            │
- *  │                            │ │ 홈 화면                               │
- *  │                            │ │ 시간 표시 · 홈 복귀 · 보이기           │
- *  └ [저장한 와이파이 지우기]   ┘ └───────────────────────────────────────┘
+ *  ┌ 와이파이        [찾기] ┐ ┌ 화면 끄기 ─────────────────────────────┐
+ *  │ 'Multi_2G' 저장됨 · … │ │ 밤 시간   [22:00] ~ [07:00]             │
+ *  │ (찾은 와이파이 목록)   │ │ 주말·휴일 [끄기] [켜 두기]              │
+ *  │                        │ ├ 홈 화면 ───────────────────────────────┤
+ *  │                        │ │ 시간 표시 · 홈 복귀 · 보이기            │
+ *  │                        │ ├ 자료 받기 ─────────────────────────────┤
+ *  └ [저장한 와이파이 지우기]┘ └ [지금 받기]  08:16 받음                 ┘
  */
 #include <stdlib.h>
 
@@ -14,7 +15,8 @@
 #include "ui.h"
 #include "ui_priv.h"
 
-#define LEFT_W 470
+#define LEFT_W 400
+#define LBL_W 116   /* 오른쪽 칸의 이름 너비 */
 
 static lv_obj_t *s_wifi_info, *s_wifi_list, *s_scan_btn, *s_status;
 static lv_obj_t *s_from, *s_to;
@@ -25,7 +27,7 @@ static char s_pop_ssid[33];
 static const int RET_MIN[6] = { 1, 3, 5, 10, 20, 0 };
 static const char *RET_NAMES[6] = { "1분", "3분", "5분", "10분", "20분", "안 함" };
 static const char SHOW_KEYS[5] = { 'w', 'd', 'm', 't', 's' };
-static const char *SHOW_NAMES[5] = { "날씨", "미세먼지", "급식", "시간표", "오늘 일정" };
+static const char *SHOW_NAMES[5] = { "날씨", "미세먼지", "급식", "시간표", "오늘" };
 
 static void save_and_apply(void)
 {
@@ -241,17 +243,29 @@ static void on_night(lv_event_t *e)
 
 static lv_obj_t *row_label(lv_obj_t *parent, int y, const char *text)
 {
-    lv_obj_t *l = mk_label(parent, &font_kr_18, C_DIM, text);
-    lv_obj_set_pos(l, 0, y + 10);
+    lv_obj_t *l = mk_label(parent, &font_kr_18, C_TEXT, text);
+    lv_obj_set_pos(l, 4, y + 11);
     return l;
 }
 
-static lv_obj_t *opt(lv_obj_t *parent, int x, int y, const char *text, lv_event_cb_t cb, int i)
+static lv_obj_t *opt(lv_obj_t *parent, int x, int y, int w, const char *text, lv_event_cb_t cb, int i)
 {
     lv_obj_t *b = mk_btn(parent, text, &font_kr_18, cb, (void *)(intptr_t)i);
     lv_obj_set_pos(b, x, y);
-    lv_obj_set_size(b, 120, 40);
+    lv_obj_set_size(b, w, 42);
     return b;
+}
+
+/* 묶음 제목 + 위쪽 가는 줄 */
+static void section(lv_obj_t *parent, int y, const char *text, int w)
+{
+    if (y > 0) {
+        lv_obj_t *line = mk_box(parent, 0, y - 12, w, 1);
+        lv_obj_set_style_bg_color(line, lv_color_hex(C_LINE), 0);
+        lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
+    }
+    lv_obj_t *h = mk_label(parent, &font_kr_22, C_SKY, text);
+    lv_obj_set_pos(h, 0, y);
 }
 
 static lv_obj_t *dropdown(lv_obj_t *parent, int x, int y, const char *opts)
@@ -260,6 +274,7 @@ static lv_obj_t *dropdown(lv_obj_t *parent, int x, int y, const char *opts)
     lv_dropdown_set_options(d, opts);
     lv_obj_set_pos(d, x, y);
     lv_obj_set_size(d, 150, 42);
+    lv_obj_set_style_radius(d, 10, 0);
     lv_obj_set_style_text_font(d, &font_kr_18, 0);
     lv_obj_set_style_bg_color(d, lv_color_hex(C_CARD2), 0);
     lv_obj_set_style_text_color(d, lv_color_hex(C_TEXT), 0);
@@ -275,7 +290,7 @@ void set_build(lv_obj_t *page)
 {
     /* 와이파이 */
     lv_obj_t *c = mk_card(page, PAD, BODY_Y, LEFT_W, BODY_H);
-    mk_label(c, &font_kr_22, C_TEXT, "와이파이");
+    mk_label(c, &font_kr_22, C_SKY, "와이파이");
     s_scan_btn = mk_btn(c, "찾기", &font_kr_18, on_scan, NULL);
     lv_obj_set_size(s_scan_btn, 100, 40);
     btn_set_on(s_scan_btn, true);
@@ -290,14 +305,11 @@ void set_build(lv_obj_t *page)
     lv_obj_t *v = mk_label(c, &font_kr_18, C_DIM, "오늘판 " APP_VERSION);
     lv_obj_align(v, LV_ALIGN_BOTTOM_RIGHT, 0, -8);
 
-    /* 화면 끄기 · 홈 화면 */
+    /* 화면 끄기 · 홈 화면 · 자료 */
     int x = PAD + LEFT_W + PAD;
-    c = mk_card(page, x, BODY_Y, SCR_W - x - PAD, BODY_H);
-    mk_label(c, &font_kr_22, C_TEXT, "화면 끄기");
-    b = mk_btn(c, "지금 받기", &font_kr_18, on_refresh, NULL);
-    lv_obj_set_size(b, 120, 40);
-    btn_set_on(b, true);
-    lv_obj_align(b, LV_ALIGN_TOP_RIGHT, 0, -6);
+    int cw = SCR_W - x - PAD;
+    int iw = cw - 28;           /* 안쪽 너비 */
+    c = mk_card(page, x, BODY_Y, cw, BODY_H);
 
     static char from_opts[200], to_opts[160];
     size_t o = strlcpy(from_opts, "안 끔", sizeof(from_opts));
@@ -306,33 +318,42 @@ void set_build(lv_obj_t *page)
         o += snprintf(from_opts + o, sizeof(from_opts) - o, "\n%02d:00", h);
         p += snprintf(to_opts + p, sizeof(to_opts) - p, "%s%02d:00", h ? "\n" : "", h);
     }
-    row_label(c, 40, "밤 시간");
-    s_from = dropdown(c, 110, 40, from_opts);
-    lv_obj_t *tilde = mk_label(c, &font_kr_18, C_DIM, "~");
-    lv_obj_set_pos(tilde, 270, 50);
-    s_to = dropdown(c, 290, 40, to_opts);
+    section(c, 0, "화면 끄기", iw);
+    row_label(c, 38, "밤 시간");
+    s_from = dropdown(c, LBL_W, 38, from_opts);
+    lv_obj_t *tilde = mk_label(c, &font_kr_22, C_DIM, "~");
+    lv_obj_set_pos(tilde, LBL_W + 160, 46);
+    s_to = dropdown(c, LBL_W + 184, 38, to_opts);
     lv_dropdown_set_selected(s_from, g_cfg.night_from[0] ? atoi(g_cfg.night_from) + 1 : 0);
     lv_dropdown_set_selected(s_to, g_cfg.night_to[0] ? atoi(g_cfg.night_to) : 7);
+    row_label(c, 88, "주말·휴일");
+    s_weekend[0] = opt(c, LBL_W, 88, 150, "끄기", on_weekend, 1);
+    s_weekend[1] = opt(c, LBL_W + 160, 88, 150, "켜 두기", on_weekend, 0);
 
-    row_label(c, 92, "주말·휴일");
-    s_weekend[0] = opt(c, 110, 92, "끄기", on_weekend, 1);
-    s_weekend[1] = opt(c, 240, 92, "켜 두기", on_weekend, 0);
-    s_status = mk_label(c, &font_kr_18, C_GREEN, "");
-    lv_obj_set_pos(s_status, 0, 142);
-
-    lv_obj_t *h = mk_label(c, &font_kr_22, C_TEXT, "홈 화면");
-    lv_obj_set_pos(h, 0, 178);
-    row_label(c, 214, "시간 표시");
-    s_h12[0] = opt(c, 110, 214, "24시간", on_h12, 0);
-    s_h12[1] = opt(c, 240, 214, "12시간", on_h12, 1);
-    row_label(c, 262, "홈 복귀");
+    section(c, 158, "홈 화면", iw);
+    row_label(c, 196, "시간 표시");
+    s_h12[0] = opt(c, LBL_W, 196, 150, "24시간", on_h12, 0);
+    s_h12[1] = opt(c, LBL_W + 160, 196, 150, "12시간", on_h12, 1);
+    row_label(c, 246, "홈 복귀");
+    int bw = (iw - LBL_W - 5 * 6) / 6;
     for (int i = 0; i < 6; i++) {
-        s_ret[i] = opt(c, 110 + (i % 3) * 130, 262 + (i / 3) * 46, RET_NAMES[i], on_ret, i);
+        s_ret[i] = opt(c, LBL_W + i * (bw + 6), 246, bw, RET_NAMES[i], on_ret, i);
     }
-    row_label(c, 360, "보이기");
+    row_label(c, 296, "보이기");
+    bw = (iw - LBL_W - 4 * 6) / 5;
     for (int i = 0; i < 5; i++) {
-        s_show[i] = opt(c, 110 + (i % 3) * 130, 360 + (i / 3) * 46, SHOW_NAMES[i], on_show, i);
+        s_show[i] = opt(c, LBL_W + i * (bw + 6), 296, bw, SHOW_NAMES[i], on_show, i);
     }
+
+    section(c, 366, "자료 받기", iw);
+    b = mk_btn(c, "지금 받기", &font_kr_18, on_refresh, NULL);
+    lv_obj_set_pos(b, LBL_W, 404);
+    lv_obj_set_size(b, 150, 42);
+    btn_set_on(b, true);
+    s_status = mk_label(c, &font_kr_18, C_GREEN, "");
+    lv_obj_set_pos(s_status, LBL_W + 166, 415);
+    lv_obj_t *note = mk_label(c, &font_kr_18, C_DIM, "날씨 30분 · 급식 3시간 · 일정 1시간마다");
+    lv_obj_set_pos(note, 4, 460);
     mark();
     wifi_info();
 }
