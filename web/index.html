@@ -301,6 +301,13 @@ $('placeSearch').onclick = async () => {
 
 /* ---- 보드와 USB 로 이야기하기 ---- */
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const heard = [];   // 대답을 못 받았을 때 보여 줄, 보드가 보낸 마지막 줄들
+
+function showHeard() {
+  if (!heard.length) { log('보드에서 아무 글자도 오지 않았습니다. 고른 포트가 CH343 인지, 케이블이 UART 단자에 꽂혔는지 확인하세요.', 'warn'); return; }
+  log('보드가 보낸 마지막 줄:', 'warn');
+  heard.slice(-6).forEach(l => log('  ' + l.slice(0, 160)));
+}
 
 async function talk(command, expect, timeoutMs = 20000) {
   if (!('serial' in navigator)) {
@@ -317,6 +324,7 @@ async function talk(command, expect, timeoutMs = 20000) {
   const writer = port.writable.getWriter();
   const dec = new TextDecoder();
   let text = '', answer = null;
+  heard.length = 0;
 
   const reading = (async () => {
     while (answer === null) {
@@ -327,6 +335,7 @@ async function talk(command, expect, timeoutMs = 20000) {
       text = lines.pop();
       for (const l of lines) {
         if (l.trim().startsWith(expect)) { answer = l.trim(); break; }
+        if (l.trim()) heard.push(l.trim());
       }
     }
   })().catch(() => {});
@@ -376,9 +385,12 @@ $('send').onclick = async () => {
     const ans = await talk('CFG ' + JSON.stringify(cfg), 'CFG ');
     if (ans === 'CFG OK') log('설정을 보냈습니다. 보드가 다시 시작하고 곧 화면이 채워집니다.', 'ok');
     else if (ans) log('보드가 설정을 받지 못했습니다: ' + ans, 'err');
-    else log('보드가 대답하지 않습니다. 프로그램을 먼저 설치했는지, 스위치가 UART1 인지 확인하세요.', 'err');
+    else { log('보드가 대답하지 않습니다.', 'err'); showHeard(); }
   } catch (e) {
-    log(e.name === 'NotFoundError' ? '포트를 고르지 않았습니다.' : '연결 오류: ' + e.message, 'warn');
+    log(e.name === 'NotFoundError' ? '포트를 고르지 않았습니다.'
+      : e.name === 'InvalidStateError' || /open/i.test(e.message)
+        ? '포트를 열 수 없습니다. 다른 창(다른 설치 사이트, 아두이노 등)이 포트를 쓰고 있으면 닫고, 케이블을 뺐다 꽂은 뒤 다시 하세요.'
+        : '연결 오류: ' + e.name + ' ' + e.message, 'err');
   }
   $('send').disabled = false;
 };
@@ -388,7 +400,7 @@ $('info').onclick = async () => {
   try {
     log('보드 상태를 읽는 중…');
     const ans = await talk('INFO', 'INFO ', 10000);
-    if (!ans) { log('보드가 대답하지 않습니다.', 'err'); return; }
+    if (!ans) { log('보드가 대답하지 않습니다.', 'err'); showHeard(); return; }
     const j = JSON.parse(ans.slice(5));
     const c = j.cfg;
     log(`판: ${j.ver} · 와이파이: ${c.ssid || '(없음)'} ${j.ip ? '· 주소 ' + j.ip : '· 연결 안 됨'}`, 'ok');
