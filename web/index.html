@@ -6,7 +6,6 @@
 <title>오늘판 설치</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
-<script type="module" src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js?module"></script>
 <style>
   :root {
     --bg: #f4f6fa; --card: #ffffff; --line: #e3e8f0; --text: #172033; --dim: #67748a;
@@ -72,7 +71,7 @@
   details { margin-top: 12px; }
   summary { cursor: pointer; color: var(--accent); font-size: 14px; }
   .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; align-items: center; }
-  #log {
+  #log, .log {
     margin-top: 14px; padding: 12px; border-radius: 10px; background: var(--field); border: 1px solid var(--line);
     font: 13px/1.5 ui-monospace, Consolas, monospace; min-height: 60px; white-space: pre-wrap; color: var(--dim);
   }
@@ -99,12 +98,10 @@
       <li>아래 단추를 누르고, 뜨는 창에서 <b>USB-Enhanced-SERIAL CH343</b> 포트를 고릅니다.</li>
     </ol>
     <div class="actions">
-      <esp-web-install-button manifest="manifest.json">
-        <button slot="activate" class="primary">프로그램 설치하기</button>
-        <span slot="unsupported" class="err">이 브라우저는 USB 연결을 지원하지 않습니다. 크롬이나 엣지를 쓰세요.</span>
-        <span slot="not-allowed" class="err">https 주소에서 열어야 합니다.</span>
-      </esp-web-install-button>
+      <button id="flash" class="primary">프로그램 설치하기</button>
+      <progress id="flashBar" max="1" value="0" style="flex:1;min-width:160px;display:none"></progress>
     </div>
+    <div id="flashLog" class="log" style="display:none"></div>
     <p class="note">포트가 안 보이면 CH343 드라이버를 설치하세요. 그래도 안 되면 BOOT 단추를 누른 채로 케이블을 꽂고 다시 해 보세요.</p>
   </section>
 
@@ -311,39 +308,42 @@ async function talk(command, expect, timeoutMs = 20000) {
     return null;
   }
   const port = await navigator.serial.requestPort();
-  await port.open({ baudRate: 115200 });
-  /* 보드가 다시 시작하거나 다운로드 모드로 들어가지 않게 */
-  await port.setSignals({ dataTerminalReady: false, requestToSend: false });
+  if (port.readable) await port.close().catch(() => {});   // 앞에서 열어 둔 채 남은 경우
+  await port.open({ baudRate: 115200, bufferSize: 65536 });
+  /* 7B 의 자동 리셋 회로: DTR·RTS 를 둘 다 내려 두면 보드가 그대로 돈다 */
+  await port.setSignals({ dataTerminalReady: false, requestToSend: false }).catch(() => {});
 
-  const decoder = new TextDecoderStream();
-  const piped = port.readable.pipeTo(decoder.writable).catch(() => {});
-  const reader = decoder.readable.getReader();
+  const reader = port.readable.getReader();
   const writer = port.writable.getWriter();
+  const dec = new TextDecoder();
   let text = '', answer = null;
 
   const reading = (async () => {
     while (answer === null) {
       const { value, done } = await reader.read();
       if (done) break;
-      text += value;
+      text += dec.decode(value, { stream: true });
       const lines = text.split('\n');
       text = lines.pop();
       for (const l of lines) {
-        if (l.startsWith(expect)) { answer = l.trim(); break; }
+        if (l.trim().startsWith(expect)) { answer = l.trim(); break; }
       }
     }
   })().catch(() => {});
 
-  const start = Date.now();
-  while (answer === null && Date.now() - start < timeoutMs) {
-    await writer.write(new TextEncoder().encode(command + '\n'));
-    await sleep(1500);
+  try {
+    const start = Date.now();
+    while (answer === null && Date.now() - start < timeoutMs) {
+      await writer.write(new TextEncoder().encode(command + '\n'));
+      await sleep(1500);
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+    await reading;
+    try { reader.releaseLock(); } catch (e) {}
+    try { writer.releaseLock(); } catch (e) {}
+    await port.close().catch(() => {});
   }
-  await reader.cancel().catch(() => {});
-  await reading;
-  await piped;
-  writer.releaseLock();
-  await port.close().catch(() => {});
   return answer;
 }
 
@@ -402,6 +402,66 @@ $('info').onclick = async () => {
 
 SAVED.forEach(k => $(k).addEventListener('change', remember));
 restore();
+</script>
+
+<script type="module">
+/* ---- 프로그램 넣기: esptool-js 로 합친 이미지를 0x0 에 씁니다 ---- */
+import { ESPLoader, Transport } from 'https://cdn.jsdelivr.net/npm/esptool-js@0.5.7/bundle.js';
+
+const $ = id => document.getElementById(id);
+const flashLog = (msg, cls = '') => {
+  const el = $('flashLog');
+  el.style.display = 'block';
+  const line = document.createElement('div');
+  line.textContent = msg;
+  if (cls) line.className = cls;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+};
+
+$('flash').onclick = async () => {
+  if (!('serial' in navigator)) { flashLog('이 브라우저는 USB 연결을 지원하지 않습니다. 크롬이나 엣지를 쓰세요.', 'err'); return; }
+  const btn = $('flash'), bar = $('flashBar');
+  $('flashLog').textContent = '';
+  let port;
+  try { port = await navigator.serial.requestPort(); }
+  catch (e) { flashLog('포트를 고르지 않았습니다.', 'warn'); return; }
+
+  btn.disabled = true;
+  bar.style.display = 'block'; bar.value = 0;
+  let transport;
+  try {
+    flashLog('프로그램 파일 받는 중…');
+    const r = await fetch('firmware/oneulpan.bin', { cache: 'no-store' });
+    if (!r.ok) throw new Error('프로그램 파일을 받지 못했습니다 (' + r.status + ')');
+    const bin = new Uint8Array(await r.arrayBuffer());
+    let data = '';                                   // esptool-js 0.5 는 '이진 문자열'을 받습니다
+    for (let i = 0; i < bin.length; i += 0x8000) data += String.fromCharCode.apply(null, bin.subarray(i, i + 0x8000));
+
+    if (port.readable) await port.close().catch(() => {});
+    transport = new Transport(port, false);
+    const term = { clean() {}, writeLine: s => flashLog(s), write: s => flashLog(s) };
+    const loader = new ESPLoader({ transport, baudrate: 921600, romBaudrate: 115200, terminal: term });
+    flashLog('보드에 연결하는 중…');
+    const chip = await loader.main();
+    flashLog('칩: ' + chip);
+    if (!/ESP32-S3/i.test(chip)) throw new Error('ESP32-S3 가 아닙니다');
+    await loader.writeFlash({
+      fileArray: [{ data, address: 0 }], flashSize: 'keep', flashMode: 'keep', flashFreq: 'keep',
+      eraseAll: false, compress: true, reportProgress: (_i, done, total) => { bar.value = done / total; },
+    });
+    bar.value = 1;
+    await loader.after('hard_reset');
+    flashLog('다 넣었습니다. 보드가 다시 켜집니다. 이제 아래 2~6단계로 설정을 보내세요.', 'ok');
+  } catch (e) {
+    flashLog('실패: ' + (e && e.message || e), 'err');
+    flashLog('케이블을 뺐다 꽂고 다시 해 보세요. 그래도 안 되면 BOOT 단추를 누른 채 케이블을 꽂고 해 보세요.', 'warn');
+  } finally {
+    try { await transport?.disconnect(); } catch (e) {}
+    try { await port.close(); } catch (e) {}
+    btn.disabled = false;
+  }
+};
 </script>
 </body>
 </html>
