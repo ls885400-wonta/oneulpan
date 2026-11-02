@@ -309,6 +309,8 @@ function showHeard() {
   heard.slice(-6).forEach(l => log('  ' + l.slice(0, 160)));
 }
 
+/* 포트를 열면 보드가 다시 켜질 수 있습니다. 켜지는 동안 보낸 줄은 깨지므로
+   먼저 INFO 로 보드가 깨어났는지 확인한 뒤, 명령을 한 번만 보냅니다. */
 async function talk(command, expect, timeoutMs = 20000) {
   if (!('serial' in navigator)) {
     log('이 브라우저는 USB 연결을 지원하지 않습니다. 크롬이나 엣지를 쓰세요.', 'err');
@@ -323,30 +325,55 @@ async function talk(command, expect, timeoutMs = 20000) {
   const reader = port.readable.getReader();
   const writer = port.writable.getWriter();
   const dec = new TextDecoder();
-  let text = '', answer = null;
+  let text = '', closed = false;
+  const got = [];          // 보드가 보낸 줄 (아직 확인 안 한 것)
   heard.length = 0;
 
   const reading = (async () => {
-    while (answer === null) {
+    while (!closed) {
       const { value, done } = await reader.read();
       if (done) break;
       text += dec.decode(value, { stream: true });
       const lines = text.split('\n');
       text = lines.pop();
       for (const l of lines) {
-        if (l.trim().startsWith(expect)) { answer = l.trim(); break; }
-        if (l.trim()) heard.push(l.trim());
+        const t = l.trim();
+        if (!t) continue;
+        got.push(t);
+        heard.push(t);
       }
     }
   })().catch(() => {});
 
+  const send = s => writer.write(new TextEncoder().encode('\n' + s + '\n'));
+  async function waitLine(prefix, ms) {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      const i = got.findIndex(l => l.startsWith(prefix));
+      if (i >= 0) { const l = got[i]; got.length = 0; return l; }
+      await sleep(100);
+    }
+    return null;
+  }
+
+  let answer = null;
   try {
     const start = Date.now();
-    while (answer === null && Date.now() - start < timeoutMs) {
-      await writer.write(new TextEncoder().encode(command + '\n'));
-      await sleep(1500);
+    let info = null;
+    while (info === null && Date.now() - start < timeoutMs) {
+      await send('INFO');
+      info = await waitLine('INFO ', 1500);
+    }
+    if (command === 'INFO') {
+      answer = info;
+    } else if (info !== null) {
+      for (let i = 0; i < 3 && (answer === null || answer === 'CFG ERR'); i++) {
+        await send(command);
+        answer = await waitLine(expect, 5000);
+      }
     }
   } finally {
+    closed = true;
     await reader.cancel().catch(() => {});
     await reading;
     try { reader.releaseLock(); } catch (e) {}

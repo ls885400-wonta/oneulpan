@@ -117,6 +117,15 @@ char *config_public_json(void)
 
 static void handle_line(char *line)
 {
+    /* 켜지는 동안 받은 깨진 조각이 앞에 붙을 수 있어, 마지막 명령부터 읽습니다 */
+    for (char *p; (p = strstr(line + 1, "CFG ")) != NULL;) {
+        line = p;
+    }
+    char *info = strstr(line, "INFO");
+    if (strncmp(line, "CFG ", 4) && info && !strcmp(info, "INFO")) {
+        line = info;
+    }
+
     if (!strncmp(line, "CFG ", 4)) {
         if (config_apply_json(line + 4)) {
             printf("\nCFG OK\n");
@@ -159,5 +168,6 @@ static void serial_task(void *arg)
 void config_serial_start(void)
 {
     ESP_ERROR_CHECK(uart_driver_install(UART_NUM_0, 4096, 0, 0, NULL, 0));
+    uart_flush_input(UART_NUM_0);
     xTaskCreate(serial_task, "serial", 6144, NULL, 3, NULL);
 }
