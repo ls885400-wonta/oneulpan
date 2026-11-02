@@ -1,8 +1,11 @@
 /* 오늘판 — ESP32-S3-Touch-LCD-7B 용 사무실 알림판
- * 시계·날씨·구글 캘린더·급식·시간표를 한 화면에 보여 줍니다. */
+ * 시계·날씨·급식·교사 시간표·학교 일정·창체 계획·캘린더를 보여 줍니다. */
 #include <assert.h>
+#include <stdlib.h>
 
 #include "app_config.h"
+#include "cJSON.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
 #include "feeds.h"
@@ -12,6 +15,12 @@
 #include "ui.h"
 
 static const char *TAG = "main";
+
+/* JSON 은 크기가 클 수 있어 PSRAM 에 둡니다 */
+static void *json_malloc(size_t size)
+{
+    return heap_caps_malloc(size, MALLOC_CAP_SPIRAM);
+}
 
 static void display_start(void)
 {
@@ -49,7 +58,11 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(err);
 
+    cJSON_Hooks hooks = { .malloc_fn = json_malloc, .free_fn = free };
+    cJSON_InitHooks(&hooks);
+
     config_load();
+    storage_init();
     config_serial_start();
     ESP_LOGI(TAG, "오늘판 %s 시작 (%s)", APP_VERSION, g_cfg.title);
 
@@ -59,6 +72,10 @@ void app_main(void)
         esp_lv_adapter_unlock();
     }
 
+    teachers_load();
     net_start(g_cfg.ssid, g_cfg.pass);
     feeds_start();
+    ESP_LOGI(TAG, "남은 메모리: 내부 %u, PSRAM %u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 }

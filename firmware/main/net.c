@@ -13,20 +13,28 @@
 #include "esp_netif.h"
 #include "esp_netif_sntp.h"
 #include "esp_wifi.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "ui.h"
 
 static const char *TAG = "net";
 
 static volatile bool s_connected;
+static bool s_has_ssid;
 static char s_ip[16] = "";
 
 static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
+        if (s_has_ssid) {
+            esp_wifi_connect();
+        }
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         s_connected = false;
         s_ip[0] = 0;
-        esp_wifi_connect();
+        if (s_has_ssid) {
+            esp_wifi_connect();
+        }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *ev = data;
         snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&ev->ip_info.ip));
@@ -44,11 +52,8 @@ void net_start(const char *ssid, const char *pass)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_create_default_wifi_sta();
 
-    if (ssid[0] == 0) {
-        ESP_LOGW(TAG, "와이파이 설정 없음");
-        return;
-    }
-
+    /* 와이파이 설정이 없어도 켜 둡니다 (보드 설정 화면에서 찾기) */
+    s_has_ssid = ssid[0] != 0;
     wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&init));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_wifi_event, NULL));
@@ -62,9 +67,52 @@ void net_start(const char *ssid, const char *pass)
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     ESP_ERROR_CHECK(esp_wifi_start());
+    if (!s_has_ssid) {
+        ESP_LOGW(TAG, "와이파이 설정 없음");
+        return;
+    }
 
     esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
     esp_netif_sntp_init(&sntp);
+}
+
+/* ---- 와이파이 찾기 (보드 설정 화면) ---- */
+
+static void scan_task(void *arg)
+{
+    wifi_scan_t *list = calloc(1, sizeof(*list));
+    wifi_scan_config_t sc = { .show_hidden = false };
+    if (list && esp_wifi_scan_start(&sc, true) == ESP_OK) {
+        uint16_t n = WIFI_SCAN_MAX;
+        wifi_ap_record_t *rec = calloc(n, sizeof(*rec));
+        if (rec && esp_wifi_scan_get_ap_records(&n, rec) == ESP_OK) {
+            for (int i = 0; i < n; i++) {
+                if (!rec[i].ssid[0]) {
+                    continue;
+                }
+                bool dup = false;
+                for (int j = 0; j < list->count; j++) {
+                    dup |= !strcmp(list->ap[j].ssid, (char *)rec[i].ssid);
+                }
+                if (dup) {
+                    continue;
+                }
+                strlcpy(list->ap[list->count].ssid, (char *)rec[i].ssid, sizeof(list->ap[0].ssid));
+                list->ap[list->count].rssi = rec[i].rssi;
+                list->ap[list->count].open = rec[i].authmode == WIFI_AUTH_OPEN;
+                list->count++;
+            }
+        }
+        free(rec);
+    }
+    ui_wifi_scanned(list);
+    free(list);
+    vTaskDelete(NULL);
+}
+
+void net_scan(void)
+{
+    xTaskCreate(scan_task, "scan", 4096, NULL, 3, NULL);
 }
 
 bool net_connected(void)

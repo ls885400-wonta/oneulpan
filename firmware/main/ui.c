@@ -1,67 +1,54 @@
-/* 화면 (1024 x 600)
+/* 화면 뼈대: 위쪽 줄(메뉴), 화면 바꾸기, 밤에 화면 끄기, 홈으로 돌아가기
  *
- *  ┌ 이름 ─────────────────────────────── 와이파이 · 갱신 ┐
- *  │ 시계·날짜      │ 일정 (오늘 / 7일)  │ 점심            │
- *  │ 날씨           │                    │ 시간표 (선택)   │
- *  └──────────────────────────────────────────────────────┘
+ *  홈 화면은 위쪽 줄 없이 꽉 차게, 다른 화면은 위쪽 줄 + 내용입니다.
+ *  ┌ 교 황인환 선생님 │ 홈 학교일정 창체계획 찾기 캘린더 급식 설정 │ 와이파이  19:48 ┐
  */
 #include "ui.h"
 
-#include <stdio.h>
-#include <string.h>
+#include <stdlib.h>
 
-#include "app_config.h"
 #include "esp_lv_adapter.h"
-#include "fonts_kr.h"
-#include "lvgl.h"
+#include "rgb_lcd_port.h"
+#include "ui_priv.h"
 
-#define C_BG     0x0B1220
-#define C_CARD   0x162036
-#define C_TEXT   0xE8EDF5
-#define C_DIM    0x8A97AD
-#define C_BLUE   0x5AA9FF
-#define C_WARM   0xFFB547
-#define C_GREEN  0x5BD6A0
-#define C_PINK   0xFF7A90
+static lv_obj_t *s_pages[PG_COUNT];
+static lv_obj_t *s_bar, *s_tabs[PG_COUNT], *s_badge, *s_name, *s_status, *s_clock, *s_date;
+static int s_page = PG_HOME;
+static bool s_screen_off;
+static int s_last_day;
+char g_status_text[64] = "";
+static time_t s_updated;
+static bool s_connected, s_configured;
 
-#define TOP 60
-#define GAP 8
-#define COL_W 330
-#define BODY_H (600 - TOP - GAP)
+static const char *TAB_NAMES[PG_COUNT] = { "홈", "학교일정", "창체계획", "찾기", "캘린더", "급식", "설정" };
 
-static const char *WEEKDAYS[] = { "일", "월", "화", "수", "목", "금", "토" };
+/* ---------------- 만들기 도우미 ---------------- */
 
-static lv_obj_t *s_status, *s_time, *s_date;
-static lv_obj_t *s_w_title, *s_w_temp, *s_w_cond, *s_w_detail, *s_w_day[2];
-static lv_obj_t *s_cal_list;
-static lv_obj_t *s_meal_card, *s_meal_title, *s_meal_menu, *s_meal_dinner;
-static lv_obj_t *s_tt_card, *s_tt_title, *s_tt_rows[MAX_PERIODS];
-static lv_obj_t *s_setup;
-static char s_status_text[64] = "";
-static char s_updated_text[32] = "";
-
-/* ---------------- 도우미 ---------------- */
-
-static void on_tap(lv_event_t *e)
+lv_obj_t *mk_box(lv_obj_t *parent, int x, int y, int w, int h)
 {
-    feeds_refresh_now();
+    lv_obj_t *b = lv_obj_create(parent);
+    lv_obj_remove_style_all(b);
+    lv_obj_set_pos(b, x, y);
+    lv_obj_set_size(b, w, h);
+    lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+    return b;
 }
 
-static lv_obj_t *card(int x, int y, int w, int h)
+lv_obj_t *mk_card(lv_obj_t *parent, int x, int y, int w, int h)
 {
-    lv_obj_t *c = lv_obj_create(lv_scr_act());
+    lv_obj_t *c = lv_obj_create(parent);
     lv_obj_set_pos(c, x, y);
     lv_obj_set_size(c, w, h);
     lv_obj_set_style_bg_color(c, lv_color_hex(C_CARD), 0);
     lv_obj_set_style_radius(c, 16, 0);
-    lv_obj_set_style_border_width(c, 0, 0);
-    lv_obj_set_style_pad_all(c, 16, 0);
+    lv_obj_set_style_border_width(c, 1, 0);
+    lv_obj_set_style_border_color(c, lv_color_hex(C_LINE), 0);
+    lv_obj_set_style_pad_all(c, 14, 0);
     lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(c, on_tap, LV_EVENT_CLICKED, NULL);
     return c;
 }
 
-static lv_obj_t *label(lv_obj_t *parent, const lv_font_t *font, uint32_t color, const char *text)
+lv_obj_t *mk_label(lv_obj_t *parent, const lv_font_t *font, uint32_t color, const char *text)
 {
     lv_obj_t *l = lv_label_create(parent);
     lv_obj_set_style_text_font(l, font, 0);
@@ -70,18 +57,79 @@ static lv_obj_t *label(lv_obj_t *parent, const lv_font_t *font, uint32_t color, 
     return l;
 }
 
-static lv_obj_t *wrap_label(lv_obj_t *parent, const lv_font_t *font, uint32_t color, const char *text)
+lv_obj_t *mk_wrap(lv_obj_t *parent, const lv_font_t *font, uint32_t color, const char *text)
 {
-    lv_obj_t *l = label(parent, font, color, text);
+    lv_obj_t *l = mk_label(parent, font, color, text);
     lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(l, lv_pct(100));
     return l;
 }
 
-static const char *weather_text(int code)
+lv_obj_t *mk_btn(lv_obj_t *parent, const char *text, const lv_font_t *font, lv_event_cb_t cb, void *user)
+{
+    lv_obj_t *b = lv_btn_create(parent);
+    lv_obj_set_style_bg_color(b, lv_color_hex(C_CARD2), 0);
+    lv_obj_set_style_radius(b, 10, 0);
+    lv_obj_set_style_shadow_width(b, 0, 0);
+    lv_obj_set_style_border_width(b, 1, 0);
+    lv_obj_set_style_border_color(b, lv_color_hex(C_LINE), 0);
+    lv_obj_set_style_pad_all(b, 6, 0);
+    lv_obj_t *l = mk_label(b, font, C_TEXT, text);
+    lv_obj_center(l);
+    if (cb) {
+        lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, user);
+    }
+    return b;
+}
+
+void btn_set_on(lv_obj_t *btn, bool on)
+{
+    lv_obj_set_style_bg_color(btn, lv_color_hex(on ? C_ACCENT : C_CARD2), 0);
+    lv_obj_set_style_border_color(btn, lv_color_hex(on ? C_BLUE : C_LINE), 0);
+}
+
+static void on_link(lv_event_t *e)
+{
+    ui_go((int)(intptr_t)lv_event_get_user_data(e));
+}
+
+lv_obj_t *mk_link(lv_obj_t *parent, const char *text, int page)
+{
+    char buf[48];
+    snprintf(buf, sizeof(buf), "%s " LV_SYMBOL_RIGHT, text);
+    lv_obj_t *l = mk_label(parent, &font_kr_18, C_BLUE, buf);
+    lv_obj_add_flag(l, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(l, 12);
+    lv_obj_add_event_cb(l, on_link, LV_EVENT_CLICKED, (void *)(intptr_t)page);
+    return l;
+}
+
+lv_obj_t *mk_list(lv_obj_t *parent, int x, int y, int w, int h)
+{
+    lv_obj_t *l = lv_obj_create(parent);
+    lv_obj_remove_style_all(l);
+    lv_obj_set_pos(l, x, y);
+    lv_obj_set_size(l, w, h);
+    lv_obj_set_flex_flow(l, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(l, 6, 0);
+    lv_obj_set_scroll_dir(l, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(l, LV_SCROLLBAR_MODE_ACTIVE);
+    return l;
+}
+
+void label_set(lv_obj_t *label, const char *text)
+{
+    if (strcmp(lv_label_get_text(label), text)) {
+        lv_label_set_text(label, text);
+    }
+}
+
+/* ---------------- 글자 만들기 ---------------- */
+
+const char *weather_text(int code)
 {
     if (code == 0) return "맑음";
-    if (code <= 2) return "구름 조금";
+    if (code <= 2) return "구름";
     if (code == 3) return "흐림";
     if (code <= 48) return "안개";
     if (code <= 57) return "이슬비";
@@ -92,7 +140,7 @@ static const char *weather_text(int code)
     return "뇌우";
 }
 
-static uint32_t weather_color(int code)
+uint32_t weather_color(int code)
 {
     if (code <= 1) return C_WARM;
     if (code <= 48) return C_DIM;
@@ -100,292 +148,318 @@ static uint32_t weather_color(int code)
     return C_BLUE;
 }
 
-static void refresh_status(void)
+/* 환경부 기준: 미세 30/80/150, 초미세 15/35/75 */
+void dust_text(int pm10, int pm25, char *buf, size_t size, uint32_t *color)
 {
-    char buf[112];
-    snprintf(buf, sizeof(buf), "%s%s%s", s_status_text, s_updated_text[0] ? "  ·  " : "", s_updated_text);
-    lv_label_set_text(s_status, buf);
+    int a = pm10 <= 30 ? 0 : pm10 <= 80 ? 1 : pm10 <= 150 ? 2 : 3;
+    int b = pm25 <= 15 ? 0 : pm25 <= 35 ? 1 : pm25 <= 75 ? 2 : 3;
+    int lv = a > b ? a : b;
+    static const char *NAMES[] = { "좋음", "보통", "나쁨", "매우 나쁨" };
+    static const uint32_t COLORS[] = { C_BLUE, C_GREEN, C_WARM, C_RED };
+    snprintf(buf, size, "%s", NAMES[lv]);
+    *color = COLORS[lv];
 }
 
-/* ---------------- 시계 ---------------- */
+void join_menu(const char *menu, const char *sep, char *buf, size_t size)
+{
+    size_t o = 0, sl = strlen(sep);
+    for (const char *p = menu; *p && o < size - 1 - sl; p++) {
+        if (*p == '\n') {
+            memcpy(buf + o, sep, sl);
+            o += sl;
+        } else {
+            buf[o++] = *p;
+        }
+    }
+    buf[o] = 0;
+}
 
-static void clock_tick(lv_timer_t *t)
+void date_text(int ymd, char *buf, size_t size)
+{
+    snprintf(buf, size, "%d월 %d일 (%s)", ymd / 100 % 100, ymd % 100, WEEKDAYS[ymd_wday(ymd)]);
+}
+
+int now_minute(void)
 {
     time_t now = time(NULL);
-    if (now < 1735689600) {
-        lv_label_set_text(s_time, "--:--");
-        lv_label_set_text(s_date, "");
-        return;
-    }
     struct tm tm;
     localtime_r(&now, &tm);
-    char buf[48];
-    snprintf(buf, sizeof(buf), "%02d:%02d", tm.tm_hour, tm.tm_min);
-    if (strcmp(buf, lv_label_get_text(s_time))) {
-        lv_label_set_text(s_time, buf);
+    return tm.tm_hour * 60 + tm.tm_min;
+}
+
+/* ---------------- 위쪽 줄 ---------------- */
+
+static void on_tab(lv_event_t *e)
+{
+    ui_go((int)(intptr_t)lv_event_get_user_data(e));
+}
+
+static void bar_name(void)
+{
+    char buf[64];
+    if (g_cfg.owner[0]) {
+        snprintf(buf, sizeof(buf), "%s 선생님", g_cfg.owner);
+    } else {
+        strlcpy(buf, g_cfg.title, sizeof(buf));
     }
-    snprintf(buf, sizeof(buf), "%d월 %d일 %s요일", tm.tm_mon + 1, tm.tm_mday, WEEKDAYS[tm.tm_wday]);
-    if (strcmp(buf, lv_label_get_text(s_date))) {
-        lv_label_set_text(s_date, buf);
+    label_set(s_name, buf);
+    char first[8] = "";
+    const char *src = g_cfg.title[0] ? g_cfg.title : "오";
+    int n = ((unsigned char)src[0] & 0xE0) == 0xE0 ? 3 : 1; /* 첫 글자 */
+    memcpy(first, src, n);
+    first[n] = 0;
+    label_set(lv_obj_get_child(s_badge, 0), first);
+}
+
+static void bar_build(lv_obj_t *scr)
+{
+    s_bar = mk_box(scr, 0, 0, SCR_W, BAR_H);
+    lv_obj_set_style_bg_color(s_bar, lv_color_hex(0x0F1A2E), 0);
+    lv_obj_set_style_bg_opa(s_bar, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_side(s_bar, LV_BORDER_SIDE_BOTTOM, 0);
+    lv_obj_set_style_border_width(s_bar, 1, 0);
+    lv_obj_set_style_border_color(s_bar, lv_color_hex(C_LINE), 0);
+
+    s_badge = mk_box(s_bar, 12, 10, 44, 44);
+    lv_obj_set_style_radius(s_badge, 12, 0);
+    lv_obj_set_style_bg_opa(s_badge, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(s_badge, lv_color_hex(C_RED), 0);
+    lv_obj_set_style_bg_grad_color(s_badge, lv_color_hex(C_ACCENT), 0);
+    lv_obj_set_style_bg_grad_dir(s_badge, LV_GRAD_DIR_HOR, 0);
+    lv_obj_center(mk_label(s_badge, &font_kr_22, C_TEXT, ""));
+
+    s_name = mk_label(s_bar, &font_kr_22, C_TEXT, "");
+    lv_obj_set_pos(s_name, 66, 19);
+    lv_label_set_long_mode(s_name, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(s_name, 190);
+
+    lv_obj_t *tabs = mk_box(s_bar, 262, 8, 7 * 72 + 8, 48);
+    lv_obj_set_style_bg_color(tabs, lv_color_hex(C_CARD), 0);
+    lv_obj_set_style_bg_opa(tabs, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(tabs, 12, 0);
+    for (int i = 0; i < PG_COUNT; i++) {
+        lv_obj_t *t = mk_box(tabs, 4 + i * 72, 4, 72, 40);
+        lv_obj_set_style_radius(t, 10, 0);
+        lv_obj_set_style_bg_color(t, lv_color_hex(C_ACCENT), 0);
+        lv_obj_add_flag(t, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(t, on_tab, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+        lv_obj_center(mk_label(t, &font_kr_18, C_TEXT, TAB_NAMES[i]));
+        s_tabs[i] = t;
+    }
+
+    s_status = mk_label(s_bar, &font_kr_18, C_GREEN, "");
+    lv_obj_set_pos(s_status, 782, 22);
+    s_clock = mk_label(s_bar, &font_kr_26, C_TEXT, "");
+    lv_obj_align(s_clock, LV_ALIGN_TOP_RIGHT, -14, 6);
+    s_date = mk_label(s_bar, &font_kr_18, C_DIM, "");
+    lv_obj_align(s_date, LV_ALIGN_TOP_RIGHT, -14, 38);
+    bar_name();
+}
+
+void ui_go(int page)
+{
+    if (page < 0 || page >= PG_COUNT) {
+        return;
+    }
+    for (int i = 0; i < PG_COUNT; i++) {
+        if (i == page) {
+            lv_obj_clear_flag(s_pages[i], LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_pages[i], LV_OBJ_FLAG_HIDDEN);
+        }
+        lv_obj_set_style_bg_opa(s_tabs[i], i == page ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+    }
+    if (page == PG_HOME) {
+        lv_obj_add_flag(s_bar, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_clear_flag(s_bar, LV_OBJ_FLAG_HIDDEN);
+        bar_name();
+    }
+    s_page = page;
+}
+
+int ui_page(void)
+{
+    return s_page;
+}
+
+/* ---------------- 1초마다 ---------------- */
+
+static void clock_texts(char *clock, size_t cs, char *date, size_t ds)
+{
+    time_t now = time(NULL);
+    struct tm tm;
+    localtime_r(&now, &tm);
+    if (now < 1735689600) {
+        strlcpy(clock, "--:--", cs);
+        date[0] = 0;
+        return;
+    }
+    int h = tm.tm_hour;
+    if (g_cfg.h12[0] == '1') {
+        h = h % 12 == 0 ? 12 : h % 12;
+    }
+    snprintf(clock, cs, "%d:%02d", h, tm.tm_min);
+    snprintf(date, ds, "%d월 %d일 (%s)", tm.tm_mon + 1, tm.tm_mday, WEEKDAYS[tm.tm_wday]);
+}
+
+static void screen_power(void)
+{
+    if (time(NULL) < 1735689600) {
+        return;
+    }
+    int m = now_minute();
+    bool off = false;
+    if (g_cfg.night_from[0] && g_cfg.night_to[0]) {
+        int from = atoi(g_cfg.night_from) * 60, to = atoi(g_cfg.night_to) * 60;
+        off = from < to ? (m >= from && m < to) : (m >= from || m < to);
+    }
+    if (g_cfg.weekend_off[0] == '1') {
+        int today = ymd_today();
+        int wd = ymd_wday(today);
+        bool holiday;
+        school_day_info(today, &holiday);
+        off |= wd == 0 || wd == 6 || holiday;
+    }
+    /* 끄는 시간이라도 누르면 1분 동안 켭니다 */
+    bool want_off = off && lv_disp_get_inactive_time(NULL) > 60000;
+    if (want_off != s_screen_off) {
+        s_screen_off = want_off;
+        if (want_off) {
+            wavesahre_rgb_lcd_bl_off();
+            ui_go(PG_HOME);
+        } else {
+            wavesahre_rgb_lcd_bl_on();
+        }
     }
 }
 
-/* ---------------- 만들기 ---------------- */
+static void tick(lv_timer_t *t)
+{
+    char clock[16], date[32];
+    clock_texts(clock, sizeof(clock), date, sizeof(date));
+    label_set(s_clock, clock);
+    label_set(s_date, date);
+
+    int today = ymd_today();
+    if (today != s_last_day && time(NULL) > 1735689600) {
+        s_last_day = today;
+        for (int k = D_WEATHER; k <= D_TEACHERS; k++) {
+            ui_refresh(k);
+        }
+    }
+
+    int ret = atoi(g_cfg.home_ret);
+    if (s_page != PG_HOME && ret > 0 && lv_disp_get_inactive_time(NULL) > (uint32_t)ret * 60000) {
+        ui_go(PG_HOME);
+    }
+    screen_power();
+
+    home_tick();
+    find_tick();
+    set_tick();
+}
+
+/* ---------------- 바깥에서 부르는 것 ---------------- */
+
+static void status_text(void)
+{
+    char buf[64];
+    if (!s_configured) {
+        strlcpy(buf, LV_SYMBOL_WIFI " 와이파이 설정 필요", sizeof(buf));
+    } else if (!s_connected) {
+        strlcpy(buf, LV_SYMBOL_WIFI " 연결 중…", sizeof(buf));
+    } else if (s_updated > 0) {
+        struct tm tm;
+        localtime_r(&s_updated, &tm);
+        snprintf(buf, sizeof(buf), LV_SYMBOL_WIFI " %02d:%02d 받음", tm.tm_hour, tm.tm_min);
+    } else {
+        strlcpy(buf, LV_SYMBOL_WIFI " 연결됨", sizeof(buf));
+    }
+    if (strcmp(buf, g_status_text)) {
+        strlcpy(g_status_text, buf, sizeof(g_status_text));
+        label_set(s_status, buf);
+        lv_obj_set_style_text_color(s_status, lv_color_hex(s_connected ? C_GREEN : C_WARM), 0);
+        home_refresh(-1);
+    }
+}
+
+void ui_set_status(bool configured, bool connected, const char *ip)
+{
+    if (configured == s_configured && connected == s_connected && g_status_text[0]) {
+        return;
+    }
+    if (esp_lv_adapter_lock(-1) == ESP_OK) {
+        s_configured = configured;
+        s_connected = connected;
+        status_text();
+        esp_lv_adapter_unlock();
+    }
+}
+
+void ui_set_updated(time_t when)
+{
+    if (esp_lv_adapter_lock(-1) == ESP_OK) {
+        s_updated = when;
+        status_text();
+        esp_lv_adapter_unlock();
+    }
+}
+
+void ui_wifi_scanned(const wifi_scan_t *list)
+{
+    if (esp_lv_adapter_lock(-1) == ESP_OK) {
+        set_wifi_list(list);
+        esp_lv_adapter_unlock();
+    }
+}
+
+void ui_refresh(int kind)
+{
+    switch (kind) {
+    case D_WEATHER:
+        home_refresh(kind);
+        break;
+    case D_MEALS:
+        home_refresh(kind);
+        meal_refresh();
+        break;
+    case D_MYCAL:
+        home_refresh(kind);
+        cal_refresh();
+        break;
+    case D_SCHOOL:
+        home_refresh(kind);
+        school_refresh();
+        find_refresh();
+        break;
+    case D_CHA:
+        cha_refresh();
+        break;
+    case D_TEACHERS:
+        home_refresh(kind);
+        find_refresh();
+        break;
+    }
+}
 
 void ui_init(void)
 {
     lv_obj_t *scr = lv_scr_act();
     lv_obj_set_style_bg_color(scr, lv_color_hex(C_BG), 0);
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(scr, on_tap, LV_EVENT_CLICKED, NULL);
 
-    /* 위쪽 줄 */
-    lv_obj_t *title = label(scr, &font_kr_26, C_TEXT, g_cfg.title);
-    lv_obj_set_pos(title, 20, 16);
-    s_status = label(scr, &font_kr_18, C_DIM, "");
-    lv_obj_align(s_status, LV_ALIGN_TOP_RIGHT, -20, 20);
+    void (*build[PG_COUNT])(lv_obj_t *) = { home_build, school_build, cha_build, find_build,
+                                            cal_build, meal_build, set_build };
+    for (int i = 0; i < PG_COUNT; i++) {
+        s_pages[i] = mk_box(scr, 0, 0, SCR_W, SCR_H);
+        build[i](s_pages[i]);
+    }
+    bar_build(scr);
+    ui_go(PG_HOME);
 
-    /* 왼쪽: 시계 */
-    int x = GAP;
-    lv_obj_t *c = card(x, TOP, COL_W, 250);
-    s_time = label(c, &font_num_130, C_TEXT, "--:--");
-    lv_obj_align(s_time, LV_ALIGN_TOP_MID, 0, -6);
-    s_date = label(c, &font_kr_36, C_BLUE, "");
-    lv_obj_align(s_date, LV_ALIGN_BOTTOM_MID, 0, 0);
-
-    /* 왼쪽: 날씨 */
-    c = card(x, TOP + 250 + GAP, COL_W, BODY_H - 250 - GAP);
-    s_w_title = label(c, &font_kr_18, C_DIM, "날씨");
-    s_w_temp = label(c, &font_num_60, C_TEXT, "");
-    lv_obj_set_pos(s_w_temp, 0, 28);
-    s_w_cond = label(c, &font_kr_26, C_WARM, g_cfg.lat[0] ? "불러오는 중…" : "위치 설정 필요");
-    lv_obj_set_pos(s_w_cond, 150, 52);
-    s_w_detail = label(c, &font_kr_18, C_TEXT, "");
-    lv_obj_set_pos(s_w_detail, 0, 112);
-    for (int i = 0; i < 2; i++) {
-        s_w_day[i] = label(c, &font_kr_18, C_DIM, "");
-        lv_obj_set_pos(s_w_day[i], 0, 156 + i * 34);
-    }
-
-    /* 가운데: 일정 */
-    x += COL_W + GAP;
-    c = card(x, TOP, COL_W, BODY_H);
-    label(c, &font_kr_26, C_PINK, "일정");
-    s_cal_list = lv_obj_create(c);
-    lv_obj_remove_style_all(s_cal_list);
-    lv_obj_set_pos(s_cal_list, 0, 44);
-    lv_obj_set_size(s_cal_list, lv_pct(100), BODY_H - 32 - 44);
-    lv_obj_set_flex_flow(s_cal_list, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(s_cal_list, 6, 0);
-    lv_obj_clear_flag(s_cal_list, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-    wrap_label(s_cal_list, &font_kr_22, C_DIM,
-               g_cfg.ical[0] ? "불러오는 중…" : "설치 페이지에서 구글 캘린더 주소를 넣으면 여기에 일정이 나옵니다.");
-
-    /* 오른쪽: 급식 + 시간표 */
-    x += COL_W + GAP;
-    int right_w = 1024 - x - GAP;
-    bool has_tt = g_cfg.grade[0] && g_cfg.cls[0];
-    int meal_h = has_tt ? 300 : BODY_H;
-    s_meal_card = card(x, TOP, right_w, meal_h);
-    s_meal_title = label(s_meal_card, &font_kr_26, C_WARM, "오늘 점심");
-    s_meal_menu = wrap_label(s_meal_card, &font_kr_22, C_TEXT,
-                             g_cfg.school[0] ? "불러오는 중…" : "설치 페이지에서 학교를 고르면 급식이 나옵니다.");
-    lv_obj_set_pos(s_meal_menu, 0, 44);
-    lv_obj_set_style_text_line_space(s_meal_menu, 6, 0);
-    s_meal_dinner = wrap_label(s_meal_card, &font_kr_18, C_DIM, "");
-    lv_obj_align(s_meal_dinner, LV_ALIGN_BOTTOM_LEFT, 0, 0);
-
-    s_tt_card = card(x, TOP + meal_h + GAP, right_w, BODY_H - meal_h - GAP);
-    char buf[64];
-    snprintf(buf, sizeof(buf), "시간표 · %s학년 %s반", g_cfg.grade, g_cfg.cls);
-    s_tt_title = label(s_tt_card, &font_kr_26, C_GREEN, buf);
-    for (int i = 0; i < MAX_PERIODS; i++) {
-        s_tt_rows[i] = label(s_tt_card, &font_kr_22, C_TEXT, "");
-        lv_obj_set_pos(s_tt_rows[i], (i / 4) * 150, 42 + (i % 4) * 36);
-        lv_label_set_long_mode(s_tt_rows[i], LV_LABEL_LONG_DOT);
-        lv_obj_set_size(s_tt_rows[i], 145, 30);
-    }
-    if (!has_tt) {
-        lv_obj_add_flag(s_tt_card, LV_OBJ_FLAG_HIDDEN);
-    }
-
-    /* 처음 설정 안내 */
-    if (!g_cfg.ssid[0]) {
-        s_setup = card(162, 170, 700, 260);
-        lv_obj_set_style_bg_color(s_setup, lv_color_hex(0x22304F), 0);
-        lv_obj_set_style_shadow_width(s_setup, 40, 0);
-        lv_obj_t *h = label(s_setup, &font_kr_26, C_WARM, "처음 설정이 필요합니다");
-        lv_obj_align(h, LV_ALIGN_TOP_MID, 0, 8);
-        lv_obj_t *b = wrap_label(s_setup, &font_kr_22, C_TEXT,
-                                 "1. 보드 뒷면 스위치를 UART1 쪽으로 두고\n"
-                                 "    UART 단자를 컴퓨터에 꽂으세요.\n"
-                                 "2. 컴퓨터에서 설치 페이지를 열고\n"
-                                 "    와이파이와 학교를 넣은 뒤 '설정 보내기'를 누르세요.");
-        lv_obj_set_pos(b, 10, 60);
-        lv_obj_set_style_text_line_space(b, 8, 0);
-    }
-
-    lv_timer_create(clock_tick, 1000, NULL);
-    clock_tick(NULL);
-}
-
-/* ---------------- 자료 넣기 ---------------- */
-
-static bool lock(void)
-{
-    return esp_lv_adapter_lock(-1) == ESP_OK;
-}
-
-static void unlock(void)
-{
-    esp_lv_adapter_unlock();
-}
-
-void ui_set_status(bool configured, bool connected, const char *ip)
-{
-    char buf[64];
-    snprintf(buf, sizeof(buf), LV_SYMBOL_WIFI "  %s",
-             !configured ? "와이파이 설정 필요" : connected ? "연결됨" : "연결 중…");
-    if (!strcmp(buf, s_status_text)) {
-        return;
-    }
-    strlcpy(s_status_text, buf, sizeof(s_status_text));
-    if (lock()) {
-        refresh_status();
-        unlock();
-    }
-}
-
-void ui_set_updated(time_t when)
-{
-    if (when <= 0) {
-        return;
-    }
-    struct tm tm;
-    localtime_r(&when, &tm);
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%02d:%02d 갱신", tm.tm_hour, tm.tm_min);
-    if (!strcmp(buf, s_updated_text)) {
-        return;
-    }
-    strlcpy(s_updated_text, buf, sizeof(s_updated_text));
-    if (lock()) {
-        refresh_status();
-        unlock();
-    }
-}
-
-void ui_set_weather(const weather_t *w)
-{
-    char temp[16], detail[96], day[2][96], title[80];
-    snprintf(title, sizeof(title), "날씨 · %s", g_cfg.place[0] ? g_cfg.place : "현재 위치");
-    snprintf(temp, sizeof(temp), "%.0f°", w->temp);
-    snprintf(detail, sizeof(detail), "최고 %.0f°  ·  최저 %.0f°  ·  습도 %d%%",
-             w->day_max[0], w->day_min[0], w->humidity);
-    static const char *names[] = { "내일", "모레" };
-    for (int i = 0; i < 2; i++) {
-        snprintf(day[i], sizeof(day[i]), "%s  %s  %.0f° / %.0f°  강수 %d%%", names[i],
-                 weather_text(w->day_code[i + 1]), w->day_max[i + 1], w->day_min[i + 1], w->day_pop[i + 1]);
-    }
-    if (!lock()) {
-        return;
-    }
-    lv_label_set_text(s_w_title, title);
-    lv_label_set_text(s_w_temp, temp);
-    lv_label_set_text(s_w_cond, weather_text(w->code));
-    lv_obj_set_style_text_color(s_w_cond, lv_color_hex(weather_color(w->code)), 0);
-    lv_label_set_text(s_w_detail, detail);
-    lv_label_set_text(s_w_day[0], day[0]);
-    lv_label_set_text(s_w_day[1], day[1]);
-    unlock();
-}
-
-void ui_set_meal(const meal_t *m)
-{
-    char dinner[640] = "";
-    if (m->dinner[0]) {
-        /* 저녁은 한 줄로: "저녁  밥, 국, ..." */
-        size_t o = strlcpy(dinner, "저녁  ", sizeof(dinner));
-        for (const char *p = m->dinner; *p && o < sizeof(dinner) - 3; p++) {
-            if (*p == '\n') {
-                dinner[o++] = ',';
-                dinner[o++] = ' ';
-            } else {
-                dinner[o++] = *p;
-            }
-        }
-        dinner[o] = 0;
-    }
-    if (!lock()) {
-        return;
-    }
-    lv_label_set_text(s_meal_title, m->tomorrow ? "내일 점심" : "오늘 점심");
-    lv_label_set_text(s_meal_menu, m->lunch[0] ? m->lunch : "급식이 없는 날입니다.");
-    lv_label_set_text(s_meal_dinner, dinner);
-    unlock();
-}
-
-void ui_set_timetable(const timetable_t *tt, bool tomorrow)
-{
-    if (!lock()) {
-        return;
-    }
-    char buf[64];
-    snprintf(buf, sizeof(buf), "%s시간표 · %s학년 %s반", tomorrow ? "내일 " : "", g_cfg.grade, g_cfg.cls);
-    lv_label_set_text(s_tt_title, buf);
-    for (int i = 0; i < MAX_PERIODS; i++) {
-        if (i < tt->count) {
-            snprintf(buf, sizeof(buf), "%d  %s", i + 1, tt->subject[i][0] ? tt->subject[i] : "-");
-        } else {
-            buf[0] = 0;
-        }
-        lv_label_set_text(s_tt_rows[i], i == 0 && tt->count == 0 ? "수업 없음" : buf);
-    }
-    unlock();
-}
-
-static void time_text(int minute, char *buf, size_t size)
-{
-    if (minute < 0) {
-        strlcpy(buf, "종일", size);
-    } else {
-        snprintf(buf, size, "%02d:%02d", minute / 60, minute % 60);
-    }
-}
-
-void ui_set_calendar(const calendar_t *cal)
-{
-    if (!lock()) {
-        return;
-    }
-    lv_obj_clean(s_cal_list);
-    int today = 0;
-    for (int i = 0; i < cal->count; i++) {
-        today += cal->ev[i].day == 0;
-    }
-    if (today == 0) {
-        label(s_cal_list, &font_kr_22, C_DIM, "오늘은 일정이 없습니다.");
-    }
-    int last_day = 0;
-    time_t now = time(NULL);
-    for (int i = 0; i < cal->count; i++) {
-        const cal_event_t *ev = &cal->ev[i];
-        char t[16], buf[140];
-        time_text(ev->minute, t, sizeof(t));
-        if (ev->day != last_day) {
-            /* 날짜 머리글: "11월 3일 (화)" */
-            time_t d = now + ev->day * 86400;
-            struct tm tm;
-            localtime_r(&d, &tm);
-            snprintf(buf, sizeof(buf), "%s%d월 %d일 (%s)", ev->day == 1 ? "내일 · " : "",
-                     tm.tm_mon + 1, tm.tm_mday, WEEKDAYS[tm.tm_wday]);
-            lv_obj_t *h = label(s_cal_list, &font_kr_18, C_BLUE, buf);
-            lv_obj_set_style_pad_top(h, 10, 0);
-            last_day = ev->day;
-        }
-        snprintf(buf, sizeof(buf), "%s   %s", t, ev->title);
-        wrap_label(s_cal_list, ev->day == 0 ? &font_kr_22 : &font_kr_18,
-                   ev->day == 0 ? C_TEXT : C_DIM, buf);
-    }
-    unlock();
+    s_configured = g_cfg.ssid[0] != 0;
+    status_text();
+    lv_timer_create(tick, 1000, NULL);
+    tick(NULL);
 }

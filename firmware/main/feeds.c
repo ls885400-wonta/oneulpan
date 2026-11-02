@@ -9,6 +9,7 @@
 #include "cJSON.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_lv_adapter.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "net.h"
@@ -16,6 +17,107 @@
 
 static const char *TAG = "feeds";
 static TaskHandle_t s_task;
+
+data_t g_data;
+
+const char *WEEKDAYS[7] = { "일", "월", "화", "수", "목", "금", "토" };
+
+/* ---------------- 날짜 ---------------- */
+
+static time_t ymd_to_time(int ymd)
+{
+    struct tm tm = { .tm_year = ymd / 10000 - 1900, .tm_mon = ymd / 100 % 100 - 1,
+                     .tm_mday = ymd % 100, .tm_hour = 12 };
+    return mktime(&tm);
+}
+
+static int time_to_ymd(time_t t)
+{
+    struct tm tm;
+    localtime_r(&t, &tm);
+    return (tm.tm_year + 1900) * 10000 + (tm.tm_mon + 1) * 100 + tm.tm_mday;
+}
+
+int ymd_today(void)
+{
+    return time_to_ymd(time(NULL));
+}
+
+int ymd_add(int ymd, int days)
+{
+    return time_to_ymd(ymd_to_time(ymd) + (time_t)days * 86400);
+}
+
+int ymd_wday(int ymd)
+{
+    time_t t = ymd_to_time(ymd);
+    struct tm tm;
+    localtime_r(&t, &tm);
+    return tm.tm_wday;
+}
+
+int ymd_diff(int a, int b)
+{
+    return (int)((ymd_to_time(a) - ymd_to_time(b) + 43200) / 86400);
+}
+
+int ymd_week_monday(void)
+{
+    int today = ymd_today();
+    int wd = ymd_wday(today);
+    if (wd == 0) {
+        return ymd_add(today, 1);
+    }
+    if (wd == 6) {
+        return ymd_add(today, 2);
+    }
+    return ymd_add(today, 1 - wd);
+}
+
+/* ---------------- 자료 바꿔 끼우기 ---------------- */
+
+void feeds_swap(int kind, void *fresh)
+{
+    void **slot = kind == D_WEATHER ? (void **)&g_data.weather
+                : kind == D_MEALS ? (void **)&g_data.meals
+                : kind == D_MYCAL ? (void **)&g_data.mycal
+                : kind == D_SCHOOL ? (void **)&g_data.school
+                : kind == D_CHA ? (void **)&g_data.cha
+                : (void **)&g_data.teachers;
+    void *old = NULL;
+    if (esp_lv_adapter_lock(-1) == ESP_OK) {
+        old = *slot;
+        *slot = fresh;
+        ui_refresh(kind);
+        esp_lv_adapter_unlock();
+    } else {
+        old = fresh;
+    }
+    free(old);
+}
+
+const acad_t *school_day_info(int ymd, bool *holiday)
+{
+    const school_t *s = g_data.school;
+    const acad_t *found = NULL;
+    if (holiday) {
+        *holiday = false;
+    }
+    for (int i = 0; s && i < s->acad_count; i++) {
+        const acad_t *a = &s->acad[i];
+        if (a->ymd != ymd) {
+            continue;
+        }
+        bool off = !strcmp(a->type, "공휴일") || !strcmp(a->type, "재량휴업일") || !strcmp(a->type, "방학");
+        if (off && holiday) {
+            *holiday = true;
+        }
+        if (!found || off) {
+            found = a;
+        }
+    }
+    return found;
+}
 
 /* ---------------- 날씨 (Open-Meteo, 무료·키 필요 없음) ---------------- */
 
@@ -33,7 +135,7 @@ static bool fetch_weather(weather_t *w)
              "https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s"
              "&current=temperature_2m,relative_humidity_2m,weather_code"
              "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
-             "&timezone=Asia%%2FSeoul&forecast_days=3",
+             "&timezone=Asia%%2FSeoul&forecast_days=7",
              g_cfg.lat, g_cfg.lon);
     char *body = http_get_text(url, 16 * 1024);
     if (!body) {
@@ -41,16 +143,13 @@ static bool fetch_weather(weather_t *w)
     }
     cJSON *root = cJSON_Parse(body);
     free(body);
-    if (!root) {
-        return false;
-    }
     const cJSON *cur = cJSON_GetObjectItem(root, "current");
     const cJSON *daily = cJSON_GetObjectItem(root, "daily");
     if (cur && daily) {
         w->temp = num_at(cur, "temperature_2m", 0);
         w->humidity = (int)num_at(cur, "relative_humidity_2m", 0);
         w->code = (int)num_at(cur, "weather_code", 0);
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 7; i++) {
             w->day_code[i] = (int)num_at(daily, "weather_code", i);
             w->day_max[i] = num_at(daily, "temperature_2m_max", i);
             w->day_min[i] = num_at(daily, "temperature_2m_min", i);
@@ -59,27 +158,31 @@ static bool fetch_weather(weather_t *w)
         w->ok = true;
     }
     cJSON_Delete(root);
-    return w->ok;
-}
-
-/* ---------------- 나이스 (급식·시간표) ---------------- */
-
-/* 오후 3시가 넘으면 다음 평일을 보여 줍니다. */
-static struct tm target_day(bool *is_tomorrow)
-{
-    time_t t = time(NULL);
-    struct tm tm;
-    localtime_r(&t, &tm);
-    *is_tomorrow = false;
-    if (tm.tm_hour >= 15 || tm.tm_wday == 0 || tm.tm_wday == 6) {
-        do {
-            t += 86400;
-            localtime_r(&t, &tm);
-        } while (tm.tm_wday == 0 || tm.tm_wday == 6);
-        *is_tomorrow = true;
+    if (!w->ok) {
+        return false;
     }
-    return tm;
+
+    /* 미세먼지 */
+    snprintf(url, sizeof(url),
+             "https://air-quality-api.open-meteo.com/v1/air-quality?latitude=%s&longitude=%s"
+             "&current=pm10,pm2_5&timezone=Asia%%2FSeoul",
+             g_cfg.lat, g_cfg.lon);
+    body = http_get_text(url, 4 * 1024);
+    if (body) {
+        root = cJSON_Parse(body);
+        free(body);
+        cur = cJSON_GetObjectItem(root, "current");
+        if (cJSON_IsNumber(cJSON_GetObjectItem(cur, "pm10"))) {
+            w->pm10 = (int)(num_at(cur, "pm10", 0) + 0.5);
+            w->pm25 = (int)(num_at(cur, "pm2_5", 0) + 0.5);
+            w->air_ok = true;
+        }
+        cJSON_Delete(root);
+    }
+    return true;
 }
+
+/* ---------------- 나이스 급식 ---------------- */
 
 static cJSON *neis_rows(const char *service, const char *params, cJSON **root_out)
 {
@@ -91,7 +194,7 @@ static cJSON *neis_rows(const char *service, const char *params, cJSON **root_ou
     if (g_cfg.neis_key[0]) {
         snprintf(url + n, sizeof(url) - n, "&KEY=%s", g_cfg.neis_key);
     }
-    char *body = http_get_text(url, 48 * 1024);
+    char *body = http_get_text(url, 64 * 1024);
     if (!body) {
         return NULL;
     }
@@ -140,125 +243,134 @@ static void clean_dish(const char *src, char *dst, size_t size)
     dst[o] = 0;
 }
 
-static bool fetch_meal(meal_t *m)
+static meal_day_t *meal_slot(meals_t *m, int ymd)
 {
-    struct tm d = target_day(&m->tomorrow);
-    char params[40];
-    snprintf(params, sizeof(params), "&MLSV_YMD=%04d%02d%02d", d.tm_year + 1900, d.tm_mon + 1, d.tm_mday);
+    for (int i = 0; i < m->count; i++) {
+        if (m->day[i].ymd == ymd) {
+            return &m->day[i];
+        }
+    }
+    if (m->count >= MEAL_DAYS) {
+        return NULL;
+    }
+    meal_day_t *d = &m->day[m->count++];
+    d->ymd = ymd;
+    return d;
+}
 
+static int compare_meal(const void *a, const void *b)
+{
+    return ((const meal_day_t *)a)->ymd - ((const meal_day_t *)b)->ymd;
+}
+
+static bool fetch_meals(meals_t *m)
+{
+    int from = ymd_today(), to = ymd_add(from, 10);
+    char params[64];
+    snprintf(params, sizeof(params), "&MLSV_FROM_YMD=%d&MLSV_TO_YMD=%d", from, to);
     cJSON *root = NULL;
     cJSON *rows = neis_rows("mealServiceDietInfo", params, &root);
     if (!root) {
         return false;
     }
-    m->lunch[0] = m->dinner[0] = 0;
     cJSON *row;
     cJSON_ArrayForEach(row, rows) {
         const char *kind = cJSON_GetStringValue(cJSON_GetObjectItem(row, "MMEAL_SC_NM"));
         const char *dish = cJSON_GetStringValue(cJSON_GetObjectItem(row, "DDISH_NM"));
-        if (!kind || !dish) {
+        const char *ymd = cJSON_GetStringValue(cJSON_GetObjectItem(row, "MLSV_YMD"));
+        if (!kind || !dish || !ymd) {
+            continue;
+        }
+        meal_day_t *d = meal_slot(m, atoi(ymd));
+        if (!d) {
             continue;
         }
         if (!strcmp(kind, "중식")) {
-            clean_dish(dish, m->lunch, sizeof(m->lunch));
+            clean_dish(dish, d->lunch, sizeof(d->lunch));
         } else if (!strcmp(kind, "석식")) {
-            clean_dish(dish, m->dinner, sizeof(m->dinner));
+            clean_dish(dish, d->dinner, sizeof(d->dinner));
         }
     }
     cJSON_Delete(root);
+    qsort(m->day, m->count, sizeof(meal_day_t), compare_meal);
     m->ok = true; /* 자료가 없으면 '급식 없음' 으로 보입니다 */
-    return true;
-}
-
-static bool fetch_timetable(timetable_t *tt)
-{
-    const char *service = !strcmp(g_cfg.level, "els") ? "elsTimetable"
-                        : !strcmp(g_cfg.level, "mis") ? "misTimetable" : "hisTimetable";
-    bool tomorrow;
-    struct tm d = target_day(&tomorrow);
-    char params[80];
-    snprintf(params, sizeof(params), "&ALL_TI_YMD=%04d%02d%02d&GRADE=%s&CLASS_NM=%s",
-             d.tm_year + 1900, d.tm_mon + 1, d.tm_mday, g_cfg.grade, g_cfg.cls);
-
-    cJSON *root = NULL;
-    cJSON *rows = neis_rows(service, params, &root);
-    if (!root) {
-        return false;
-    }
-    memset(tt, 0, sizeof(*tt));
-    cJSON *row;
-    cJSON_ArrayForEach(row, rows) {
-        const char *perio = cJSON_GetStringValue(cJSON_GetObjectItem(row, "PERIO"));
-        const char *subj = cJSON_GetStringValue(cJSON_GetObjectItem(row, "ITRT_CNTNT"));
-        int p = perio ? atoi(perio) : 0;
-        if (p >= 1 && p <= MAX_PERIODS && subj) {
-            strlcpy(tt->subject[p - 1], subj, sizeof(tt->subject[0]));
-            if (p > tt->count) {
-                tt->count = p;
-            }
-        }
-    }
-    cJSON_Delete(root);
-    tt->ok = true;
     return true;
 }
 
 /* ---------------- 일정 관리 ---------------- */
 
-#define MIN_30 (30 * 60)
+#define MIN (60)
+
+static void *psram(size_t size)
+{
+    return heap_caps_calloc(1, size, MALLOC_CAP_SPIRAM);
+}
 
 static void feeds_task(void *arg)
 {
-    weather_t *w = heap_caps_calloc(1, sizeof(weather_t), MALLOC_CAP_SPIRAM);
-    meal_t *m = heap_caps_calloc(1, sizeof(meal_t), MALLOC_CAP_SPIRAM);
-    timetable_t *tt = heap_caps_calloc(1, sizeof(timetable_t), MALLOC_CAP_SPIRAM);
-    calendar_t *cal = heap_caps_calloc(1, sizeof(calendar_t), MALLOC_CAP_SPIRAM);
-
-    time_t last_weather = 0, last_school = 0, last_cal = 0;
-    int last_hour = -1;
+    time_t last_weather = 0, last_meal = 0, last_cal = 0, last_school = 0, last_cha = 0;
+    int last_day = 0;
     bool force = true;
 
     for (;;) {
         if (net_connected() && net_time_ok()) {
             time_t now = time(NULL);
-            struct tm tm;
-            localtime_r(&now, &tm);
-            /* 날짜가 바뀌거나 오후 3시가 되면 급식·시간표를 다시 받습니다 */
-            bool hour_mark = last_hour != tm.tm_hour && (tm.tm_hour == 0 || tm.tm_hour == 15);
-            last_hour = tm.tm_hour;
+            int today = ymd_today();
+            bool new_day = today != last_day;
+            last_day = today;
 
-            if (g_cfg.lat[0] && (force || now - last_weather > MIN_30)) {
-                if (fetch_weather(w)) {
+            if (g_cfg.lat[0] && (force || now - last_weather > 30 * MIN)) {
+                weather_t *w = psram(sizeof(*w));
+                if (w && fetch_weather(w)) {
                     last_weather = now;
-                    ui_set_weather(w);
+                    feeds_swap(D_WEATHER, w);
+                } else {
+                    free(w);
                 }
             }
-            if (g_cfg.school[0] && (force || hour_mark || now - last_school > 6 * 3600)) {
-                bool ok = fetch_meal(m);
-                if (ok) {
-                    ui_set_meal(m);
-                }
-                if (g_cfg.grade[0] && g_cfg.cls[0] && fetch_timetable(tt)) {
-                    ui_set_timetable(tt, m->tomorrow);
-                }
-                if (ok) {
-                    last_school = now;
+            if (g_cfg.school[0] && (force || new_day || now - last_meal > 3 * 3600)) {
+                meals_t *m = psram(sizeof(*m));
+                if (m && fetch_meals(m)) {
+                    last_meal = now;
+                    feeds_swap(D_MEALS, m);
+                } else {
+                    free(m);
                 }
             }
-            if (g_cfg.ical[0] && (force || hour_mark || now - last_cal > 15 * 60)) {
-                if (ical_fetch(g_cfg.ical, cal)) {
+            if (g_cfg.ical[0] && (force || new_day || now - last_cal > 15 * MIN)) {
+                calendar_t *c = psram(sizeof(*c));
+                if (c && ical_fetch(g_cfg.ical, c, 14)) {
                     last_cal = now;
-                    ui_set_calendar(cal);
+                    feeds_swap(D_MYCAL, c);
+                } else {
+                    free(c);
+                }
+            }
+            if (g_cfg.sched_url[0] && (force || new_day || now - last_school > 60 * MIN)) {
+                school_t *s = psram(sizeof(*s));
+                if (s && school_fetch(g_cfg.sched_url, s)) {
+                    last_school = now;
+                    feeds_swap(D_SCHOOL, s);
+                } else {
+                    free(s);
+                }
+            }
+            if (g_cfg.cha_url[0] && (force || new_day || now - last_cha > 60 * MIN)) {
+                cha_t *c = psram(sizeof(*c));
+                if (c && cha_fetch(g_cfg.cha_url, c)) {
+                    last_cha = now;
+                    feeds_swap(D_CHA, c);
+                } else {
+                    free(c);
                 }
             }
             if (force) {
                 ESP_LOGI(TAG, "모두 받음, 남은 메모리 %u / PSRAM %u",
                          (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                          (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+                ui_set_updated(now);
             }
             force = false;
-            time_t latest = last_weather > last_school ? last_weather : last_school;
-            ui_set_updated(latest > last_cal ? latest : last_cal);
         }
         ui_set_status(g_cfg.ssid[0] != 0, net_connected(), net_ip());
         if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(20000))) {

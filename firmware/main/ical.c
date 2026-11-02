@@ -13,8 +13,7 @@
 
 static const char *TAG = "ical";
 
-#define WINDOW_DAYS 7
-#define MAX_FOUND 64
+#define MAX_FOUND 128
 #define MAX_EXDATES 16
 #define MAX_OVERRIDES 32
 
@@ -98,6 +97,7 @@ typedef struct {
 
 typedef struct {
     int today;
+    int window;
     bool in_event;
     vevent_t e;
     char cur[1024];
@@ -184,7 +184,7 @@ static void parse_rrule(vevent_t *e, char *v)
 
 static void add_found(parser_t *p, int day, const vevent_t *e, bool from_rule)
 {
-    if (day < p->today || day >= p->today + WINDOW_DAYS || p->found_count >= MAX_FOUND) {
+    if (day < p->today || day >= p->today + p->window || p->found_count >= MAX_FOUND) {
         return;
     }
     found_t *f = &p->found[p->found_count++];
@@ -286,7 +286,7 @@ static void finish_event(parser_t *p)
         }
         return;
     }
-    for (int d = p->today; d < p->today + WINDOW_DAYS; d++) {
+    for (int d = p->today; d < p->today + p->window; d++) {
         if (d > e->until_day) {
             break;
         }
@@ -388,7 +388,7 @@ static int compare_found(const void *a, const void *b)
     return x->ev.minute - y->ev.minute;
 }
 
-bool ical_fetch(const char *url, calendar_t *out)
+bool ical_fetch(const char *url, calendar_t *out, int days)
 {
     parser_t *p = heap_caps_calloc(1, sizeof(parser_t), MALLOC_CAP_SPIRAM);
     if (!p) {
@@ -398,6 +398,7 @@ bool ical_fetch(const char *url, calendar_t *out)
     struct tm tm;
     localtime_r(&now, &tm);
     p->today = days_from_civil(tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
+    p->window = days;
 
     /* webcal:// 로 시작하면 https:// 로 바꿉니다 */
     char *fixed = NULL;

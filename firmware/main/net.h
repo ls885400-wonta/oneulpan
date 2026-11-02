@@ -9,6 +9,8 @@ void net_start(const char *ssid, const char *pass);
 bool net_connected(void);
 bool net_time_ok(void);
 const char *net_ip(void);
+/* 주변 와이파이를 찾아 ui_wifi_scanned 로 알려 줍니다. */
+void net_scan(void);
 
 /* 주소의 내용을 통째로 받아 옵니다. 받은 글자는 free() 로 지워야 합니다. */
 char *http_get_text(const char *url, size_t max_len);
