@@ -28,7 +28,7 @@ FONTS = [
     ("font_kr_26", "NanumGothic-Bold.ttf", 26, FULL, "lv_font_montserrat_24"),
     ("font_kr_36", "NanumGothic-Bold.ttf", 36, DATE, None),
     ("font_num_60", "NanumGothic-Bold.ttf", 60, "0123456789-.°% ", None),
-    ("font_num_130", "NanumGothic-ExtraBold.ttf", 130, "0123456789: ", None),
+    ("font_num_130", "NanumGothic-ExtraBold.ttf", 130, "0123456789:- ", None),
 ]
 
 BPP = 4
