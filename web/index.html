@@ -52,11 +52,12 @@
   .hint { color: var(--dim); font-size: 13px; margin: 4px 0 0; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px 16px; margin-top: 14px; }
   label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 4px; }
-  input, select {
+  input, select, textarea {
     width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line);
     background: var(--field); color: var(--text); font: inherit;
   }
-  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  textarea { font-family: inherit; resize: vertical; }
+  input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   .row { display: flex; gap: 8px; }
   .row input { flex: 1; min-width: 0; }
   button {
@@ -186,11 +187,12 @@
     <p class="hint">
       구글 캘린더(컴퓨터) → 오른쪽 위 톱니 → 설정 → 왼쪽 '내 캘린더의 설정'에서 캘린더 고르기 →
       '캘린더 통합' → <b>iCal 형식의 비공개 주소</b>를 복사해 넣으세요. 이 주소를 아는 사람은 일정을 볼 수 있으니
-      남에게 알려 주지 마세요. 이 화면에는 저장되지 않습니다.
+      남에게 알려 주지 마세요. 이 화면에는 저장되지 않습니다.<br>
+      캘린더가 여러 개면 주소를 <b>한 줄에 하나씩</b> 넣으세요 (최대 4개). 기본 캘린더 주소도 같이 넣어야 함께 나옵니다.
     </p>
     <div class="grid">
-      <div style="grid-column:1/-1"><label for="ical">비공개 iCal 주소</label>
-        <input id="ical" placeholder="https://calendar.google.com/calendar/ical/.../basic.ics" autocomplete="off"></div>
+      <div style="grid-column:1/-1"><label for="ical">비공개 iCal 주소 (한 줄에 하나)</label>
+        <textarea id="ical" rows="3" placeholder="https://calendar.google.com/calendar/ical/.../basic.ics" autocomplete="off"></textarea></div>
     </div>
   </section>
 
@@ -553,7 +555,8 @@ function collect() {
   if (school) Object.assign(cfg, { atpt: school.atpt, school: school.code, school_name: school.name, level: school.level });
   /* 비워 두면 보드에 있던 값 유지 */
   for (const k of ['pass', 'ical', 'neis_key', 'cha_url']) {
-    const v = $(k).value.trim();
+    let v = $(k).value.trim();
+    if (k === 'ical') v = v.split(/[\s,]+/).filter(Boolean).join(' '); /* 여러 주소는 빈칸으로 */
     if (v) cfg[k] = v;
   }
   return cfg;

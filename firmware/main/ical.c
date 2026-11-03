@@ -16,6 +16,7 @@ static const char *TAG = "ical";
 #define MAX_FOUND 128
 #define MAX_EXDATES 16
 #define MAX_OVERRIDES 32
+#define URL_SEP " ,\r\n\t" /* 주소 여러 개를 나누는 글자 */
 
 /* ---- 날짜 계산 (1970-01-01 부터 며칠째인지) ---- */
 
@@ -393,6 +394,23 @@ static int compare_found(const void *a, const void *b)
     return x->ev.minute - y->ev.minute;
 }
 
+/* 캘린더 하나마다: 파일에 일정이 있어도 앞으로 것이 없으면 0개라 어떤 캘린더인지 남깁니다 */
+static void log_one(const parser_t *p, const char *url, bool ok, int found)
+{
+    const char *id = strstr(url, "/ical/");
+    int idn = id ? (int)strcspn(id + 6, "/") : 0;
+    if (!ok) {
+        ESP_LOGW(TAG, "  %.*s: 받지 못함", idn, id ? id + 6 : url);
+        return;
+    }
+    int ly = 0, lm = 0, ld = 0;
+    if (p->last_day > 0 && p->last_day != INT_MAX) {
+        civil_from_days(p->last_day, &ly, &lm, &ld);
+    }
+    ESP_LOGI(TAG, "  %.*s: 앞으로 %d개 (파일 안 %d개, 마지막 %s%04d-%02d-%02d)", idn, id ? id + 6 : "", found,
+             p->total, p->last_day == INT_MAX ? "반복 있음 " : "", ly, lm, ld);
+}
+
 bool ical_fetch(const char *url, calendar_t *out, int days)
 {
     parser_t *p = heap_caps_calloc(1, sizeof(parser_t), MALLOC_CAP_SPIRAM);
@@ -405,18 +423,36 @@ bool ical_fetch(const char *url, calendar_t *out, int days)
     p->today = days_from_civil(tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
     p->window = days;
 
-    /* webcal:// 로 시작하면 https:// 로 바꿉니다 */
-    char *fixed = NULL;
-    if (!strncmp(url, "webcal://", 9)) {
-        asprintf(&fixed, "https://%s", url + 9);
-        url = fixed;
+    /* 주소가 여러 개면 (빈칸·쉼표로 나눔) 모두 받아 한데 모읍니다 */
+    char *list = strdup(url), *save;
+    int got = 0, tried = 0;
+    if (!list) {
+        free(p);
+        return false;
     }
-    esp_err_t err = http_get_lines(url, on_line, p);
-    free(fixed);
-    if (p->cur_len) {
-        handle_property(p, p->cur);
+    for (char *u = strtok_r(list, URL_SEP, &save); u; u = strtok_r(NULL, URL_SEP, &save)) {
+        /* webcal:// 로 시작하면 https:// 로 바꿉니다 */
+        char *fixed = NULL;
+        if (!strncmp(u, "webcal://", 9)) {
+            asprintf(&fixed, "https://%s", u + 9);
+        }
+        const char *full = fixed ? fixed : u;
+        int before = p->found_count;
+        p->total = p->last_day = 0;
+        p->in_event = false;
+        p->cur_len = 0;
+        tried++;
+        esp_err_t err = http_get_lines(full, on_line, p);
+        if (p->cur_len) {
+            handle_property(p, p->cur);
+            p->cur_len = 0;
+        }
+        log_one(p, full, err == ESP_OK, p->found_count - before);
+        got += err == ESP_OK;
+        free(fixed);
     }
-    if (err != ESP_OK) {
+    free(list);
+    if (got == 0) {
         ESP_LOGW(TAG, "캘린더를 받지 못했습니다");
         free(p);
         return false;
@@ -440,15 +476,7 @@ bool ical_fetch(const char *url, calendar_t *out, int days)
         out->ev[i] = p->found[i].ev;
     }
     out->ok = true;
-    /* 파일에 일정이 있어도 앞으로 것이 없으면 0개: 어떤 캘린더인지 알 수 있게 남깁니다 */
-    int ly = 0, lm = 0, ld = 0;
-    if (p->last_day > 0 && p->last_day != INT_MAX) {
-        civil_from_days(p->last_day, &ly, &lm, &ld);
-    }
-    const char *id = strstr(url, "/ical/");
-    ESP_LOGI(TAG, "일정 %d개 (파일 안 %d개, 마지막 %s%04d-%02d-%02d, %.*s)", kept, p->total,
-             p->last_day == INT_MAX ? "반복 있음 " : "", ly, lm, ld,
-             id ? (int)strcspn(id + 6, "/") : 0, id ? id + 6 : "");
+    ESP_LOGI(TAG, "일정 %d개 (캘린더 %d/%d개 받음)", kept, got, tried);
     free(p);
     return true;
 }
