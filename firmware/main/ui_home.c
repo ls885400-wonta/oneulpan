@@ -30,7 +30,7 @@
 #define MY_LINES 5
 #define NEXT_BG 0x15335E   /* 수업 남은 시간 칸: 짙은 파랑 바탕 */
 #define NEXT_FG 0x7CC4FF   /* 파란 글자 */
-#define TT_ROWS (TT_PERIODS + 1)   /* 교시 + 점심 */
+#define TT_ROWS (TT_PERIODS + 2)   /* 교시 + 점심 + 청소 */
 #define SCHOOL_LINES 4
 #define LESSON_MIN 50
 
@@ -217,7 +217,7 @@ static void build_tt(lv_obj_t *page)
     lv_obj_align(mk_link(c, "이번 주", PG_FIND), LV_ALIGN_TOP_RIGHT, 0, 2);
     s_tt_sub = mk_label(c, &font_kr_18, C_DIM, "");
     lv_obj_set_pos(s_tt_sub, 0, 28);
-    const int top = 56, iw = RIGHT_W - 24;
+    const int top = 52, iw = RIGHT_W - 24;
     int rh = (TT_H - 24 - top) / TT_ROWS;
     for (int i = 0; i < TT_ROWS; i++) {
         lv_obj_t *r = mk_box(c, 0, top + i * rh, iw, rh - 4);
@@ -422,6 +422,13 @@ static void refresh_meal(void)
     show_or_hide(s_dinner_row, d->dinner[0] != 0);
 }
 
+/* 점심 · 청소 줄: 테두리 없이, 지나갔으면 흐리게 */
+static void tt_plain(int i, bool past)
+{
+    lv_obj_set_style_border_width(s_tt_row[i], 0, 0);
+    lv_obj_set_style_opa(s_tt_row[i], past ? LV_OPA_60 : LV_OPA_COVER, 0);
+}
+
 static void tt_row(int i, const char *badge, uint32_t badge_bg, const char *subj, const char *room, bool now)
 {
     show_or_hide(s_tt_row[i], true);
@@ -481,7 +488,8 @@ static void refresh_next(const teachers_t *ts, int ti)
             snprintf(room, sizeof(room), " (%s)", t->room[d][nxt]);
         }
         /* 남은 시간은 흰색, 5분 안이면 빨강 */
-        snprintf(buf, sizeof(buf), "다음 수업 %d교시 %s%s · #%s %s#",
+        bool clean = m >= CLEAN_START && m < CLEAN_END;
+        snprintf(buf, sizeof(buf), "%s다음 수업 %d교시 %s%s · #%s %s#", clean ? "청소 시간 · " : "",
                  nxt + 1, t->subj[d][nxt], room, left <= 5 ? "FF7A90" : "FFFFFF", when);
     } else {
         strlcpy(buf, "오늘 수업이 모두 끝났습니다", sizeof(buf));
@@ -542,7 +550,15 @@ static void refresh_tt(void)
                 bool now = is_today && m >= prev_end && m < st;
                 snprintf(buf, sizeof(buf), "%d:%02d ~ %d:%02d", prev_end / 60, prev_end % 60, st / 60, st % 60);
                 tt_row(row++, "점심", now ? C_RED : 0x3A4F7E, "점심시간", buf, now);
+                tt_plain(row - 1, is_today && m >= st);
             }
+        }
+        if (p == TT_PERIODS - 1 && row < TT_ROWS) {
+            bool now = is_today && m >= CLEAN_START && m < CLEAN_END;
+            snprintf(buf, sizeof(buf), "%d:%02d ~ %d:%02d", CLEAN_START / 60, CLEAN_START % 60,
+                     CLEAN_END / 60, CLEAN_END % 60);
+            tt_row(row++, "청소", now ? C_RED : 0x3A4F7E, "청소시간", buf, now);
+            tt_plain(row - 1, is_today && m >= CLEAN_END);
         }
         if (row >= TT_ROWS) {
             break;

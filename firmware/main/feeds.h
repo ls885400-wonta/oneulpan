@@ -94,6 +94,8 @@ typedef struct {
 #define MAX_TEACHERS 100
 #define TT_DAYS 5
 #define TT_PERIODS 7
+#define CLEAN_START (15 * 60 + 20) /* 청소 15:20 ~ 15:40, 끝나면 7교시 */
+#define CLEAN_END (15 * 60 + 40)
 typedef struct {
     char name[32];
     char subj[TT_DAYS][TT_PERIODS][28];

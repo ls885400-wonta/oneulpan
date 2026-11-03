@@ -24,7 +24,7 @@ static teachers_t *parse(const char *json)
         return NULL;
     }
     teachers_t *t = heap_caps_calloc(1, sizeof(teachers_t), MALLOC_CAP_SPIRAM);
-    static const int DEFAULT_TIMES[TT_PERIODS] = { 520, 580, 640, 700, 810, 870, 930 };
+    static const int DEFAULT_TIMES[TT_PERIODS] = { 520, 580, 640, 700, 810, 870, CLEAN_END };
     memcpy(t->ptime, DEFAULT_TIMES, sizeof(t->ptime));
 
     const cJSON *times = cJSON_GetObjectItem(root, "times");
@@ -34,6 +34,10 @@ static teachers_t *parse(const char *json)
         if (s && sscanf(s, "%d:%d", &h, &m) == 2) {
             t->ptime[p] = h * 60 + m;
         }
+    }
+    /* 7교시는 청소 시간이 끝난 뒤에 시작합니다 (한글 파일에 15:30 으로 적혀 있어도) */
+    if (t->ptime[TT_PERIODS - 1] < CLEAN_END) {
+        t->ptime[TT_PERIODS - 1] = CLEAN_END;
     }
     const cJSON *item;
     cJSON_ArrayForEach(item, cJSON_GetObjectItem(root, "t")) {
