@@ -7,9 +7,11 @@
 #include "cJSON.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_lv_adapter.h"
 #include "feeds.h"
 #include "net.h"
+#include "nvs.h"
 #include "nvs_flash.h"
 #include "rgb_lcd_port.h"
 #include "ui.h"
@@ -22,9 +24,33 @@ static void *json_malloc(size_t size)
     return heap_caps_malloc(size, MALLOC_CAP_SPIRAM);
 }
 
+/* 화면 뒤집기 (180도). 바꾸면 다시 켜야 적용됩니다. */
+bool screen_flipped(void)
+{
+    nvs_handle_t h;
+    uint8_t v = 0;
+    if (nvs_open("board", NVS_READONLY, &h) == ESP_OK) {
+        nvs_get_u8(h, "flip", &v);
+        nvs_close(h);
+    }
+    return v != 0;
+}
+
+void screen_flip_toggle(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("board", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_u8(h, "flip", screen_flipped() ? 0 : 1);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+    esp_restart();
+}
+
 static void display_start(void)
 {
-    const esp_lv_adapter_rotation_t rotation = ESP_LV_ADAPTER_ROTATE_0;
+    const bool flip = screen_flipped();
+    const esp_lv_adapter_rotation_t rotation = flip ? ESP_LV_ADAPTER_ROTATE_180 : ESP_LV_ADAPTER_ROTATE_0;
     esp_lcd_panel_handle_t panel = NULL;
     esp_lcd_touch_handle_t touch = NULL;
     ESP_ERROR_CHECK(waveshare_esp32_s3_rgb_lcd_init(ESP_LV_ADAPTER_TEAR_AVOID_MODE_DEFAULT_RGB,
@@ -43,6 +69,9 @@ static void display_start(void)
     assert(disp != NULL);
 
     if (touch) {
+        /* 그림만 돌아가므로 터치 좌표도 같이 뒤집습니다 */
+        esp_lcd_touch_set_mirror_x(touch, flip);
+        esp_lcd_touch_set_mirror_y(touch, flip);
         esp_lv_adapter_touch_config_t touch_cfg = ESP_LV_ADAPTER_TOUCH_DEFAULT_CONFIG(disp, touch);
         esp_lv_adapter_register_touch(&touch_cfg);
     }

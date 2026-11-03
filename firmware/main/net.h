@@ -4,8 +4,14 @@
 #include <stddef.h>
 #include "esp_err.h"
 
-/* 와이파이에 연결하고 인터넷 시간(한국 시간)을 맞춥니다. */
+/* 와이파이에 연결하고 인터넷 시간(한국 시간)을 맞춥니다.
+ * ssid 는 저장된 와이파이 목록(최대 5개) 맨 앞에 올라가고,
+ * 보드는 목록 중 가장 센 와이파이에 붙고 약해지면 더 센 곳으로 옮겨 갑니다. */
 void net_start(const char *ssid, const char *pass);
+/* 저장된 목록에서 지웁니다 */
+void net_forget(const char *ssid);
+/* 지금 붙어 있는 와이파이 이름 (없으면 "") */
+const char *net_ssid(void);
 bool net_connected(void);
 bool net_time_ok(void);
 const char *net_ip(void);

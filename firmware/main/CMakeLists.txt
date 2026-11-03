@@ -1,7 +1,7 @@
 file(GLOB FONT_SRCS "fonts/*.c")
 
 idf_component_register(
-    SRCS "main.c" "app_config.c" "net.c" "feeds.c" "ical.c" "school.c" "teachers.c"
+    SRCS "main.c" "app_config.c" "net.c" "feeds.c" "ical.c" "school.c" "teachers.c" "lunar.c"
          "ui.c" "ui_home.c" "ui_find.c" "ui_pages.c" "ui_settings.c" ${FONT_SRCS}
     INCLUDE_DIRS "." "fonts"
     REQUIRES rgb_lcd_port esp_wifi esp_netif esp_event nvs_flash esp_http_client

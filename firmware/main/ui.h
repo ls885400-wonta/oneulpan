@@ -8,6 +8,10 @@
 /* 모든 화면을 만듭니다. LVGL 잠금 안에서 부르세요. */
 void ui_init(void);
 
+/* 화면 180도 뒤집기 (main.c). 바꾸면 보드가 다시 켜집니다. */
+bool screen_flipped(void);
+void screen_flip_toggle(void);
+
 /* 자료가 바뀌었을 때 (LVGL 잠금 안에서 불림, feeds_swap) */
 void ui_refresh(int kind);
 

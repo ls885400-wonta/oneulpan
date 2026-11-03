@@ -9,6 +9,8 @@
  */
 #include <stdlib.h>
 
+#include "lunar.h"
+#include "ui.h"
 #include "ui_priv.h"
 
 #define RIGHT_W ((SCR_W - PAD * 3) / 3)
@@ -26,11 +28,13 @@
 #define TT_H (SCR_H - PAD * 3 - SCHOOL_H)
 #define WX_DAYS 5
 #define MY_LINES 5
+#define NEXT_BG 0x15335E   /* 수업 남은 시간 칸: 짙은 파랑 바탕 */
+#define NEXT_FG 0x7CC4FF   /* 파란 글자 */
 #define TT_ROWS (TT_PERIODS + 1)   /* 교시 + 점심 */
 #define SCHOOL_LINES 4
 #define LESSON_MIN 50
 
-static lv_obj_t *s_time, *s_ampm, *s_date, *s_wday, *s_status;
+static lv_obj_t *s_time, *s_ampm, *s_date, *s_lunar, *s_wday, *s_status;
 static lv_obj_t *s_weather, *s_w_icon, *s_w_temp, *s_w_cond, *s_w_range, *s_w_dust, *s_w_dust_lv;
 static lv_obj_t *s_w_day[WX_DAYS], *s_w_day_icon[WX_DAYS], *s_w_day_t[WX_DAYS];
 static lv_obj_t *s_my, *s_my_line[MY_LINES];
@@ -45,6 +49,11 @@ static int s_last_min = -1;
 static void on_settings(lv_event_t *e)
 {
     ui_go(PG_SET);
+}
+
+static void on_flip(lv_event_t *e)
+{
+    screen_flip_toggle(); /* 저장하고 다시 켭니다 */
 }
 
 static void on_menu(lv_event_t *e)
@@ -90,10 +99,11 @@ static void build_clock(lv_obj_t *page)
     lv_obj_add_flag(c, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(c, on_menu, LV_EVENT_CLICKED, NULL);
     s_time = mk_label(c, &font_num_96, C_TEXT, "--:--");
-    lv_obj_align(s_time, LV_ALIGN_LEFT_MID, 0, 2);
+    lv_obj_align(s_time, LV_ALIGN_LEFT_MID, 14, 2);
     s_ampm = mk_label(c, &font_kr_22, C_DIM, "");
     s_date = mk_label(c, &font_kr_36, C_SKY, "");
     lv_obj_set_pos(s_date, 330, 26);
+    s_lunar = mk_label(c, &font_kr_22, C_DIM, "");
     s_wday = mk_label(c, &font_kr_36, C_TEXT, "");
     lv_obj_set_pos(s_wday, 330, 72);
     s_status = mk_label(c, &font_kr_18, C_GREEN, "");
@@ -186,7 +196,10 @@ static void build_next(lv_obj_t *page)
     lv_obj_t *c = s_next = mk_card(page, PAD, NEXT_Y, LEFT_W, NEXT_H);
     card_link(c, PG_FIND);
     lv_obj_set_style_pad_ver(c, 0, 0);
-    s_next_text = mk_label(c, &font_kr_26, C_TEXT, "");
+    lv_obj_set_style_bg_color(c, lv_color_hex(NEXT_BG), 0);
+    lv_obj_set_style_border_color(c, lv_color_hex(NEXT_FG), 0);
+    lv_obj_set_style_border_width(c, 2, 0);
+    s_next_text = mk_label(c, &font_kr_26, NEXT_FG, "");
     lv_label_set_recolor(s_next_text, true);
     lv_label_set_long_mode(s_next_text, LV_LABEL_LONG_DOT);
     lv_obj_set_width(s_next_text, LEFT_W - 28);
@@ -252,6 +265,12 @@ static void build_school(lv_obj_t *page)
 void home_build(lv_obj_t *page)
 {
     build_clock(page);
+    /* 왼쪽 위 귀퉁이: 화면 180도 뒤집기 */
+    lv_obj_t *flip = mk_btn(page, LV_SYMBOL_REFRESH, &lv_font_montserrat_16, on_flip, NULL);
+    lv_obj_set_size(flip, 34, 34);
+    lv_obj_set_pos(flip, PAD + 4, PAD + 4);
+    lv_obj_set_style_radius(flip, 10, 0);
+    lv_obj_set_ext_click_area(flip, 8);
     build_weather(page);
     build_my(page);
     build_meal(page);
@@ -425,11 +444,11 @@ static void refresh_next(const teachers_t *ts, int ti)
     char buf[200];
     int today = ymd_today();
     if (!ts || ti < 0) {
-        label_set(s_next_text, "#A3AFC4 선생님을 고르면 다음 수업까지 남은 시간이 나옵니다#");
+        label_set(s_next_text, "선생님을 고르면 다음 수업까지 남은 시간이 나옵니다");
         return;
     }
     if (!is_school_day(today)) {
-        label_set(s_next_text, "#A3AFC4 오늘은 수업이 없습니다#");
+        label_set(s_next_text, "오늘은 수업이 없습니다");
         return;
     }
     const teacher_t *t = &ts->t[ti];
@@ -448,7 +467,7 @@ static void refresh_next(const teachers_t *ts, int ti)
         }
     }
     if (cur >= 0) {
-        snprintf(buf, sizeof(buf), "#FF7A90 지금 %d교시 %s# 수업 중 · #FFB547 %d분 남음#",
+        snprintf(buf, sizeof(buf), "지금 %d교시 %s 수업 중 · #FFFFFF %d분 남음#",
                  cur + 1, t->subj[d][cur], ts->ptime[cur] + LESSON_MIN - m);
     } else if (nxt >= 0) {
         int left = ts->ptime[nxt] - m;
@@ -461,10 +480,11 @@ static void refresh_next(const teachers_t *ts, int ti)
         if (t->room[d][nxt][0]) {
             snprintf(room, sizeof(room), " (%s)", t->room[d][nxt]);
         }
-        snprintf(buf, sizeof(buf), "#A3AFC4 다음 수업# %d교시 %s%s · #%s %s#",
-                 nxt + 1, t->subj[d][nxt], room, left <= 5 ? "FF7A90" : "FFB547", when);
+        /* 남은 시간은 흰색, 5분 안이면 빨강 */
+        snprintf(buf, sizeof(buf), "다음 수업 %d교시 %s%s · #%s %s#",
+                 nxt + 1, t->subj[d][nxt], room, left <= 5 ? "FF7A90" : "FFFFFF", when);
     } else {
-        strlcpy(buf, "#5BD6A0 오늘 수업이 모두 끝났습니다#", sizeof(buf));
+        strlcpy(buf, "오늘 수업이 모두 끝났습니다", sizeof(buf));
     }
     label_set(s_next_text, buf);
 }
@@ -632,6 +652,15 @@ void home_tick(void)
     lv_obj_align_to(s_ampm, s_time, LV_ALIGN_OUT_RIGHT_BOTTOM, 6, -18);
     snprintf(buf, sizeof(buf), "%d월 %d일", tm.tm_mon + 1, tm.tm_mday);
     label_set(s_date, buf);
+    int lm, ld;
+    bool leap;
+    if (lunar_from_solar(ymd_today(), &lm, &ld, &leap)) {
+        snprintf(buf, sizeof(buf), "(음 %s%d.%d)", leap ? "윤" : "", lm, ld);
+    } else {
+        buf[0] = 0;
+    }
+    label_set(s_lunar, buf);
+    lv_obj_align_to(s_lunar, s_date, LV_ALIGN_OUT_RIGHT_BOTTOM, 10, -4);
     snprintf(buf, sizeof(buf), "%s요일", WEEKDAYS[tm.tm_wday]);
     label_set(s_wday, buf);
     lv_obj_set_style_text_color(s_wday, lv_color_hex(tm.tm_wday == 0 ? C_PINK : tm.tm_wday == 6 ? C_BLUE : C_TEXT), 0);

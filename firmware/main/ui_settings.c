@@ -43,8 +43,11 @@ static void wifi_info(void)
 {
     char buf[160];
     if (g_cfg.ssid[0]) {
-        snprintf(buf, sizeof(buf), "'%s' 저장됨 · %s%s", g_cfg.ssid,
-                 net_connected() ? "연결됨 " : "연결 안 됨", net_connected() ? net_ip() : "");
+        if (net_connected()) {
+            snprintf(buf, sizeof(buf), "'%s' 에 연결됨 %s · 저장된 곳 중 센 곳으로 자동 연결", net_ssid(), net_ip());
+        } else {
+            snprintf(buf, sizeof(buf), "'%s' 저장됨 · 연결 안 됨", g_cfg.ssid);
+        }
     } else {
         strlcpy(buf, "저장된 와이파이가 없습니다. [찾기] 를 눌러 고르세요.", sizeof(buf));
     }
@@ -153,12 +156,13 @@ void set_wifi_list(const void *arg)
                  bars == 3 ? "강함" : bars == 2 ? "보통" : "약함");
         lv_obj_t *s = mk_label(b, &font_kr_18, C_DIM, sig);
         lv_obj_align(s, LV_ALIGN_RIGHT_MID, -8, 0);
-        btn_set_on(b, !strcmp(list->ap[i].ssid, g_cfg.ssid));
+        btn_set_on(b, !strcmp(list->ap[i].ssid, net_ssid()));
     }
 }
 
 static void on_forget(lv_event_t *e)
 {
+    net_forget(g_cfg.ssid);
     g_cfg.ssid[0] = g_cfg.pass[0] = 0;
     config_save();
     esp_restart();

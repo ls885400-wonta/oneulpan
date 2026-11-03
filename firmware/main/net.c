@@ -14,32 +14,195 @@
 #include "esp_netif_sntp.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "nvs.h"
 #include "ui.h"
 
 static const char *TAG = "net";
 
+#define SAVED_MAX 5
+#define ROAM_WEAK (-70)    /* 이보다 약하면 더 센 곳을 찾아봄 */
+#define ROAM_BETTER 8      /* 이만큼(dB) 더 세면 옮겨 감 */
+
+typedef struct {
+    char ssid[33];
+    char pass[65];
+} saved_t;
+
 static volatile bool s_connected;
-static bool s_has_ssid;
 static char s_ip[16] = "";
+static char s_ssid[33] = "";
+static saved_t s_saved[SAVED_MAX];
+static int s_saved_n;
+static TaskHandle_t s_roam;
+static SemaphoreHandle_t s_scan_lock; /* 찾기는 한 번에 하나만 */
+
+/* ---- 저장된 와이파이 목록 (NVS "board"/"wifis") ---- */
+
+static void saved_load(void)
+{
+    nvs_handle_t h;
+    size_t len = sizeof(s_saved);
+    s_saved_n = 0;
+    if (nvs_open("board", NVS_READONLY, &h) == ESP_OK) {
+        if (nvs_get_blob(h, "wifis", s_saved, &len) == ESP_OK) {
+            s_saved_n = len / sizeof(saved_t);
+        }
+        nvs_close(h);
+    }
+}
+
+static void saved_store(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("board", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_blob(h, "wifis", s_saved, s_saved_n * sizeof(saved_t));
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+static int saved_find(const char *ssid)
+{
+    for (int i = 0; i < s_saved_n; i++) {
+        if (!strcmp(s_saved[i].ssid, ssid)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* 맨 앞에 넣기 (이미 있으면 앞으로 옮기고 비밀번호 새로) */
+static void saved_add(const char *ssid, const char *pass)
+{
+    int i = saved_find(ssid);
+    if (i < 0) {
+        i = s_saved_n < SAVED_MAX ? s_saved_n++ : SAVED_MAX - 1;
+    }
+    memmove(&s_saved[1], &s_saved[0], i * sizeof(saved_t));
+    strlcpy(s_saved[0].ssid, ssid, sizeof(s_saved[0].ssid));
+    strlcpy(s_saved[0].pass, pass, sizeof(s_saved[0].pass));
+}
+
+void net_forget(const char *ssid)
+{
+    saved_load();
+    int i = saved_find(ssid);
+    if (i >= 0) {
+        memmove(&s_saved[i], &s_saved[i + 1], (s_saved_n - i - 1) * sizeof(saved_t));
+        s_saved_n--;
+        saved_store();
+    }
+}
+
+/* ---- 연결과 로밍 ---- */
 
 static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
-    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
-        if (s_has_ssid) {
-            esp_wifi_connect();
-        }
-    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         s_connected = false;
         s_ip[0] = 0;
-        if (s_has_ssid) {
-            esp_wifi_connect();
+        s_ssid[0] = 0;
+        if (s_roam) {
+            xTaskNotifyGive(s_roam);
         }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *ev = data;
         snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&ev->ip_info.ip));
-        ESP_LOGI(TAG, "연결됨 %s", s_ip);
+        wifi_ap_record_t ap;
+        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+            strlcpy(s_ssid, (char *)ap.ssid, sizeof(s_ssid));
+        }
+        ESP_LOGI(TAG, "연결됨 %s (%s)", s_ip, s_ssid);
         s_connected = true;
+        if (s_roam) {
+            xTaskNotifyGive(s_roam);
+        }
+    }
+}
+
+/* 주변을 찾아 저장된 와이파이 중 가장 센 곳. 없으면 false */
+static bool best_saved(wifi_ap_record_t *best, int *which)
+{
+    bool found = false;
+    xSemaphoreTake(s_scan_lock, portMAX_DELAY);
+    wifi_scan_config_t sc = { .show_hidden = false };
+    if (esp_wifi_scan_start(&sc, true) == ESP_OK) {
+        uint16_t n = 30;
+        wifi_ap_record_t *rec = calloc(n, sizeof(*rec));
+        if (rec && esp_wifi_scan_get_ap_records(&n, rec) == ESP_OK) {
+            for (int i = 0; i < n; i++) {
+                int k = saved_find((char *)rec[i].ssid);
+                if (k >= 0 && (!found || rec[i].rssi > best->rssi)) {
+                    *best = rec[i];
+                    *which = k;
+                    found = true;
+                }
+            }
+        } else {
+            esp_wifi_clear_ap_list();
+        }
+        free(rec);
+    }
+    xSemaphoreGive(s_scan_lock);
+    return found;
+}
+
+static void connect_to(const wifi_ap_record_t *ap, int k)
+{
+    wifi_config_t wc = { 0 };
+    strlcpy((char *)wc.sta.ssid, s_saved[k].ssid, sizeof(wc.sta.ssid));
+    strlcpy((char *)wc.sta.password, s_saved[k].pass, sizeof(wc.sta.password));
+    wc.sta.threshold.authmode = s_saved[k].pass[0] ? WIFI_AUTH_WPA_PSK : WIFI_AUTH_OPEN;
+    memcpy(wc.sta.bssid, ap->bssid, 6);
+    wc.sta.bssid_set = true;
+    wc.sta.channel = ap->primary;
+    wc.sta.rm_enabled = 1;  /* 같은 이름 공유기끼리 옮겨 다니기 도움 */
+    wc.sta.btm_enabled = 1;
+    esp_wifi_set_config(WIFI_IF_STA, &wc);
+    ESP_LOGI(TAG, "'%s' 에 연결 (신호 %d)", s_saved[k].ssid, ap->rssi);
+    esp_wifi_connect();
+}
+
+static void roam_task(void *arg)
+{
+    for (;;) {
+        if (!s_connected) {
+            wifi_ap_record_t ap;
+            int k;
+            esp_wifi_disconnect();
+            vTaskDelay(pdMS_TO_TICKS(200));
+            ulTaskNotifyTake(pdTRUE, 0); /* 방금 끊은 알림은 버림 */
+            if (best_saved(&ap, &k)) {
+                connect_to(&ap, k);
+                /* 붙을 때까지 (또는 실패) 기다림 */
+                ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(20000));
+                if (s_connected) {
+                    continue;
+                }
+            } else {
+                ESP_LOGW(TAG, "저장된 와이파이가 보이지 않음");
+            }
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10000));
+            continue;
+        }
+        /* 붙어 있는 동안 30초마다 신호 확인, 약하면 더 센 곳으로 */
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(30000));
+        wifi_ap_record_t cur;
+        if (!s_connected || esp_wifi_sta_get_ap_info(&cur) != ESP_OK || cur.rssi >= ROAM_WEAK) {
+            continue;
+        }
+        wifi_ap_record_t ap;
+        int k;
+        if (best_saved(&ap, &k) && ap.rssi >= cur.rssi + ROAM_BETTER && memcmp(ap.bssid, cur.bssid, 6)) {
+            ESP_LOGI(TAG, "신호 약함 (%d) → 더 센 곳으로", cur.rssi);
+            esp_wifi_disconnect();
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(3000));
+            ulTaskNotifyTake(pdTRUE, 0);
+            connect_to(&ap, k);
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(20000));
+        }
     }
 }
 
@@ -51,29 +214,37 @@ void net_start(const char *ssid, const char *pass)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_create_default_wifi_sta();
+    s_scan_lock = xSemaphoreCreateMutex();
+
+    /* 설정의 와이파이는 늘 목록 맨 앞에 */
+    saved_load();
+    if (ssid[0] && (saved_find(ssid) != 0 || strcmp(s_saved[0].pass, pass))) {
+        saved_add(ssid, pass);
+        saved_store();
+    }
+    ESP_LOGI(TAG, "저장된 와이파이 %d개", s_saved_n);
 
     /* 와이파이 설정이 없어도 켜 둡니다 (보드 설정 화면에서 찾기) */
-    s_has_ssid = ssid[0] != 0;
     wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&init));
-    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_wifi_event, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, on_wifi_event, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_wifi_event, NULL));
-
-    wifi_config_t wc = { 0 };
-    strlcpy((char *)wc.sta.ssid, ssid, sizeof(wc.sta.ssid));
-    strlcpy((char *)wc.sta.password, pass, sizeof(wc.sta.password));
-    wc.sta.threshold.authmode = pass[0] ? WIFI_AUTH_WPA_PSK : WIFI_AUTH_OPEN;
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     ESP_ERROR_CHECK(esp_wifi_start());
-    if (!s_has_ssid) {
+    if (s_saved_n == 0) {
         ESP_LOGW(TAG, "와이파이 설정 없음");
         return;
     }
+    xTaskCreate(roam_task, "roam", 4096, NULL, 4, &s_roam);
 
     esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
     esp_netif_sntp_init(&sntp);
+}
+
+const char *net_ssid(void)
+{
+    return s_ssid;
 }
 
 /* ---- 와이파이 찾기 (보드 설정 화면) ---- */
@@ -82,6 +253,7 @@ static void scan_task(void *arg)
 {
     wifi_scan_t *list = calloc(1, sizeof(*list));
     wifi_scan_config_t sc = { .show_hidden = false };
+    xSemaphoreTake(s_scan_lock, portMAX_DELAY);
     if (list && esp_wifi_scan_start(&sc, true) == ESP_OK) {
         uint16_t n = WIFI_SCAN_MAX;
         wifi_ap_record_t *rec = calloc(n, sizeof(*rec));
@@ -105,6 +277,7 @@ static void scan_task(void *arg)
         }
         free(rec);
     }
+    xSemaphoreGive(s_scan_lock);
     ui_wifi_scanned(list);
     free(list);
     vTaskDelete(NULL);
