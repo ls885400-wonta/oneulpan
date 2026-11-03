@@ -28,8 +28,8 @@
 #define TT_H (SCR_H - PAD * 3 - SCHOOL_H)
 #define WX_DAYS 5
 #define MY_LINES 5
-#define NEXT_BG 0x15335E   /* 수업 남은 시간 칸: 짙은 파랑 바탕 */
-#define NEXT_FG 0x7CC4FF   /* 파란 글자 */
+#define NEXT_BG 0xDCEBFF   /* 수업 남은 시간 칸: 옅은 파랑 바탕 */
+#define NEXT_FG 0x1650C0   /* 진한 파란 글자, 남은 시간은 빨강 */
 #define TT_ROWS (TT_PERIODS + 2)   /* 교시 + 점심 + 청소 */
 #define SCHOOL_LINES 4
 #define LESSON_MIN 50
@@ -474,7 +474,7 @@ static void refresh_next(const teachers_t *ts, int ti)
         }
     }
     if (cur >= 0) {
-        snprintf(buf, sizeof(buf), "지금 %d교시 %s 수업 중 · #FFFFFF %d분 남음#",
+        snprintf(buf, sizeof(buf), "지금 %d교시 %s 수업 중 · #D81E32 %d분 남음#",
                  cur + 1, t->subj[d][cur], ts->ptime[cur] + LESSON_MIN - m);
     } else if (nxt >= 0) {
         int left = ts->ptime[nxt] - m;
@@ -487,10 +487,10 @@ static void refresh_next(const teachers_t *ts, int ti)
         if (t->room[d][nxt][0]) {
             snprintf(room, sizeof(room), " (%s)", t->room[d][nxt]);
         }
-        /* 남은 시간은 흰색, 5분 안이면 빨강 */
+        /* 남은 시간은 빨강 */
         bool clean = m >= CLEAN_START && m < CLEAN_END;
-        snprintf(buf, sizeof(buf), "%s다음 수업 %d교시 %s%s · #%s %s#", clean ? "청소 시간 · " : "",
-                 nxt + 1, t->subj[d][nxt], room, left <= 5 ? "FF7A90" : "FFFFFF", when);
+        snprintf(buf, sizeof(buf), "%s다음 수업 %d교시 %s%s · #D81E32 %s#", clean ? "청소 시간 · " : "",
+                 nxt + 1, t->subj[d][nxt], room, when);
     } else {
         strlcpy(buf, "오늘 수업이 모두 끝났습니다", sizeof(buf));
     }
