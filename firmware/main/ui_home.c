@@ -14,9 +14,9 @@
 #define RIGHT_W 330
 #define LEFT_W (SCR_W - PAD * 3 - RIGHT_W)
 #define RIGHT_X (PAD + LEFT_W + PAD)
-#define CLOCK_H 200
+#define CLOCK_H 150
 #define ROW2_Y (PAD + CLOCK_H + PAD)
-#define ROW2_H 200
+#define ROW2_H 196
 #define WEATHER_W 330
 #define MEAL_Y (ROW2_Y + ROW2_H + PAD)
 #define SCHOOL_H 150
@@ -27,7 +27,7 @@
 #define SCHOOL_LINES 4
 #define LESSON_MIN 50
 
-static lv_obj_t *s_time, *s_ampm, *s_date, *s_status;
+static lv_obj_t *s_time, *s_ampm, *s_date, *s_wday, *s_status;
 static lv_obj_t *s_weather, *s_w_icon, *s_w_temp, *s_w_cond, *s_w_range, *s_w_dust, *s_w_dust_lv;
 static lv_obj_t *s_w_day[WX_DAYS], *s_w_day_icon[WX_DAYS], *s_w_day_t[WX_DAYS];
 static lv_obj_t *s_my, *s_my_line[MY_LINES];
@@ -78,26 +78,29 @@ static lv_obj_t *dot_label(lv_obj_t *parent, int x, int y, int w)
     return l;
 }
 
+/* 시계는 왼쪽, 날짜·요일은 오른쪽에 두 줄. 카드를 누르면 메뉴 */
 static void build_clock(lv_obj_t *page)
 {
     lv_obj_t *c = mk_card(page, PAD, PAD, LEFT_W, CLOCK_H);
+    lv_obj_set_style_pad_hor(c, 24, 0);
     lv_obj_add_flag(c, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(c, on_menu, LV_EVENT_CLICKED, NULL);
+    s_time = mk_label(c, &font_num_96, C_TEXT, "--:--");
+    lv_obj_align(s_time, LV_ALIGN_LEFT_MID, 0, 2);
+    s_ampm = mk_label(c, &font_kr_22, C_DIM, "");
+    s_date = mk_label(c, &font_kr_36, C_SKY, "");
+    lv_obj_set_pos(s_date, 330, 26);
+    s_wday = mk_label(c, &font_kr_36, C_TEXT, "");
+    lv_obj_set_pos(s_wday, 330, 72);
     s_status = mk_label(c, &font_kr_18, C_GREEN, "");
-    lv_obj_set_pos(s_status, 0, -4);
+    lv_obj_align(s_status, LV_ALIGN_TOP_RIGHT, -40, -2);
     lv_obj_t *gear = mk_label(c, &lv_font_montserrat_24, C_DIM, LV_SYMBOL_SETTINGS);
     lv_obj_add_flag(gear, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_ext_click_area(gear, 16);
     lv_obj_add_event_cb(gear, on_settings, LV_EVENT_CLICKED, NULL);
     lv_obj_align(gear, LV_ALIGN_TOP_RIGHT, 0, -4);
-    lv_obj_t *hint = mk_label(c, &font_kr_18, C_DIM, "시계를 누르면 메뉴");
-    lv_obj_align(hint, LV_ALIGN_BOTTOM_RIGHT, 0, 4);
-    s_time = mk_label(c, &font_num_130, C_TEXT, "--:--");
-    lv_obj_align(s_time, LV_ALIGN_TOP_MID, 0, 0);
-    s_ampm = mk_label(c, &font_kr_22, C_DIM, "");
-    lv_obj_align_to(s_ampm, s_time, LV_ALIGN_OUT_LEFT_BOTTOM, -6, -24);
-    s_date = mk_label(c, &font_kr_36, C_SKY, "");
-    lv_obj_align(s_date, LV_ALIGN_BOTTOM_MID, 0, 2);
+    lv_obj_t *hint = mk_label(c, &font_kr_18, C_DIM, "누르면 메뉴 " LV_SYMBOL_RIGHT);
+    lv_obj_align(hint, LV_ALIGN_BOTTOM_RIGHT, 0, 2);
 }
 
 static void build_weather(lv_obj_t *page)
@@ -191,7 +194,7 @@ static void build_tt(lv_obj_t *page)
         lv_obj_set_style_bg_opa(r, LV_OPA_COVER, 0);
         lv_obj_set_style_bg_color(r, lv_color_hex(C_CARD2), 0);
         s_tt_row[i] = r;
-        lv_obj_t *b = mk_box(r, 0, 0, 72, rh - 4);
+        lv_obj_t *b = mk_box(r, 0, 0, 82, rh - 4);
         lv_obj_set_style_radius(b, 8, 0);
         lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
         s_tt_badge[i] = b;
@@ -200,9 +203,9 @@ static void build_tt(lv_obj_t *page)
         lv_obj_set_style_text_line_space(s_tt_btext[i], -4, 0);
         lv_obj_center(s_tt_btext[i]);
         s_tt_subj[i] = mk_label(r, &font_kr_22, C_TEXT, "");
-        lv_obj_set_width(s_tt_subj[i], iw - 72 - 14 - 70);
+        lv_obj_set_width(s_tt_subj[i], iw - 82 - 12 - 64);
         lv_label_set_long_mode(s_tt_subj[i], LV_LABEL_LONG_DOT);
-        lv_obj_align(s_tt_subj[i], LV_ALIGN_LEFT_MID, 84, 0);
+        lv_obj_align(s_tt_subj[i], LV_ALIGN_LEFT_MID, 92, 0);
         s_tt_room[i] = mk_label(r, &font_kr_18, C_TEXT, "");
         lv_obj_align(s_tt_room[i], LV_ALIGN_RIGHT_MID, -10, 0);
     }
@@ -507,7 +510,10 @@ static void refresh_school(void)
 void home_refresh(int kind)
 {
     if (kind == -1) {
-        label_set(s_status, g_status_text);
+        char buf[96];
+        snprintf(buf, sizeof(buf), "%s%s%s", g_status_text, g_batt_text[0] ? "   " : "", g_batt_text);
+        label_set(s_status, buf);
+        lv_obj_align(s_status, LV_ALIGN_TOP_RIGHT, -40, -2);
         lv_obj_set_style_text_color(s_status, lv_color_hex(strstr(g_status_text, "받음") || strstr(g_status_text, "연결됨") ? C_GREEN : C_WARM), 0);
         return;
     }
@@ -552,9 +558,12 @@ void home_tick(void)
     snprintf(buf, sizeof(buf), h12 ? "%d:%02d" : "%02d:%02d", h, tm.tm_min);
     label_set(s_time, buf);
     label_set(s_ampm, h12 ? (tm.tm_hour < 12 ? "오전" : "오후") : "");
-    lv_obj_align_to(s_ampm, s_time, LV_ALIGN_OUT_LEFT_BOTTOM, -6, -24);
-    snprintf(buf, sizeof(buf), "%d월 %d일 %s요일", tm.tm_mon + 1, tm.tm_mday, WEEKDAYS[tm.tm_wday]);
+    lv_obj_align_to(s_ampm, s_time, LV_ALIGN_OUT_RIGHT_BOTTOM, 6, -18);
+    snprintf(buf, sizeof(buf), "%d월 %d일", tm.tm_mon + 1, tm.tm_mday);
     label_set(s_date, buf);
+    snprintf(buf, sizeof(buf), "%s요일", WEEKDAYS[tm.tm_wday]);
+    label_set(s_wday, buf);
+    lv_obj_set_style_text_color(s_wday, lv_color_hex(tm.tm_wday == 0 ? C_PINK : tm.tm_wday == 6 ? C_BLUE : C_TEXT), 0);
 
     show_or_hide(s_setup, !g_cfg.ssid[0]);
     /* 매분: 지금 교시 강조, 저녁 7시 급식 넘기기 */

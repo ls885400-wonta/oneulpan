@@ -9,19 +9,21 @@
 #include "fonts_kr.h"
 #include "lvgl.h"
 
-#define C_BG     0x17233D
-#define C_CARD   0x223154
-#define C_CARD2  0x2F4370
-#define C_LINE   0x445A88
-#define C_TEXT   0xF4F7FC
-#define C_DIM    0xAEBBD2
+#define C_BG     0x101826
+#define C_CARD   0x1A2539
+#define C_CARD2  0x253350
+#define C_LINE   0x364767
+#define C_TEXT   0xF5F7FA
+#define C_DIM    0xA3AFC4
 #define C_BLUE   0x6CB6FF
-#define C_ACCENT 0x3B7DF0
+#define C_ACCENT 0x2F74E8
 #define C_WARM   0xFFB547
 #define C_GREEN  0x5BD6A0
 #define C_PINK   0xFF7A90
 #define C_RED    0xE5484D
 #define C_SKY    0x7DD3FC
+#define C_BTN    0x2C3B5B   /* 고르지 않은 단추 */
+#define C_BTN_LINE 0x4A5D84
 
 #define SCR_W 1024
 #define SCR_H 600
@@ -103,3 +105,4 @@ void set_tick(void);
 void set_wifi_list(const void *list);
 
 extern char g_status_text[64];
+extern char g_batt_text[24];   /* "배터리그림 97%" (없으면 빈 글자) */

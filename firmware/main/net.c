@@ -208,7 +208,9 @@ char *http_get_text(const char *url, size_t max_len)
         return NULL;
     }
     t.data[t.len] = 0;
-    return t.data;
+    /* 받은 만큼만 남기고 나머지 PSRAM 은 돌려줍니다 */
+    char *fit = heap_caps_realloc(t.data, t.len + 1, MALLOC_CAP_SPIRAM);
+    return fit ? fit : t.data;
 }
 
 typedef struct {

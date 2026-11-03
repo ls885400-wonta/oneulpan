@@ -263,11 +263,11 @@ static int compare_meal(const void *a, const void *b)
     return ((const meal_day_t *)a)->ymd - ((const meal_day_t *)b)->ymd;
 }
 
-static bool fetch_meals(meals_t *m)
+static bool meals_part(meals_t *m, int from, int to, const char *code)
 {
-    int from = ymd_today(), to = ymd_add(from, 10);
-    char params[64];
-    snprintf(params, sizeof(params), "&MLSV_FROM_YMD=%d&MLSV_TO_YMD=%d", from, to);
+    char params[96];
+    snprintf(params, sizeof(params), "&MLSV_FROM_YMD=%d&MLSV_TO_YMD=%d%s%s", from, to, code ? "&MMEAL_SC_CODE=" : "",
+             code ? code : "");
     cJSON *root = NULL;
     cJSON *rows = neis_rows("mealServiceDietInfo", params, &root);
     if (!root) {
@@ -292,6 +292,27 @@ static bool fetch_meals(meals_t *m)
         }
     }
     cJSON_Delete(root);
+    return true;
+}
+
+/* 인증키가 없으면 나이스가 한 번에 5줄만 줍니다.
+ * 그래서 키가 없으면 닷새씩 끊어 점심(2)과 저녁(3)을 따로 받습니다 (닷새에 한 끼는 5줄 이하). */
+static bool fetch_meals(meals_t *m)
+{
+    int today = ymd_today();
+    bool ok;
+    if (g_cfg.neis_key[0]) {
+        ok = meals_part(m, today, ymd_add(today, 10), NULL);
+    } else {
+        ok = true;
+        for (int w = 0; w < 2 && ok; w++) {
+            int from = ymd_add(today, w * 5), to = ymd_add(from, 4);
+            ok = meals_part(m, from, to, "2") && meals_part(m, from, to, "3");
+        }
+    }
+    if (!ok) {
+        return false;
+    }
     qsort(m->day, m->count, sizeof(meal_day_t), compare_meal);
     m->ok = true; /* 자료가 없으면 '급식 없음' 으로 보입니다 */
     return true;

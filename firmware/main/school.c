@@ -78,7 +78,7 @@ static const char *str_of(const cJSON *obj, const char *key)
  *   goog.script.init("…") 의 JS 문자열 → JSON → userHtml → init-data */
 bool school_fetch(const char *url, school_t *out)
 {
-    char *page = http_get_text(url, 1024 * 1024);
+    char *page = http_get_text(url, 512 * 1024);   /* 보통 200KB 쯤 */
     if (!page) {
         ESP_LOGW(TAG, "학교 일정을 받지 못했습니다");
         return false;
@@ -97,7 +97,8 @@ bool school_fetch(const char *url, school_t *out)
     a = a ? strchr(a, '>') : NULL;
     const char *b = a ? strstr(a, "</script") : NULL;
     if (!b) {
-        ESP_LOGW(TAG, "학교 일정 자료를 찾지 못했습니다");
+        ESP_LOGW(TAG, "학교 일정 자료를 찾지 못했습니다 (받은 %u바이트, JSON %s, 큰 빈칸 %u)", (unsigned)strlen(p),
+                 outer ? "풀림" : "못 풂", (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
         goto done;
     }
     data = cJSON_ParseWithLength(a + 1, b - a - 1);

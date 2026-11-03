@@ -7,12 +7,15 @@
 
 #include <stdlib.h>
 
+#include "esp_log.h"
 #include "esp_lv_adapter.h"
+#include "io_extension.h"
 #include "rgb_lcd_port.h"
 #include "ui_priv.h"
 
 static lv_obj_t *s_pages[PG_COUNT];
-static lv_obj_t *s_bar, *s_tabs[PG_COUNT], *s_badge, *s_name, *s_status, *s_clock, *s_date;
+static lv_obj_t *s_bar, *s_tabs[PG_COUNT], *s_badge, *s_name, *s_status, *s_clock, *s_date, *s_batt;
+char g_batt_text[24] = "";
 static int s_page = PG_HOME;
 static bool s_screen_off;
 static int s_last_day;
@@ -67,15 +70,17 @@ lv_obj_t *mk_wrap(lv_obj_t *parent, const lv_font_t *font, uint32_t color, const
 
 lv_obj_t *mk_btn(lv_obj_t *parent, const char *text, const lv_font_t *font, lv_event_cb_t cb, void *user)
 {
+    /* 기본 테마의 눌림·초점 색(보라빛)을 빼고 우리 색만 씁니다 */
     lv_obj_t *b = lv_btn_create(parent);
-    lv_obj_set_style_bg_color(b, lv_color_hex(C_CARD2), 0);
+    lv_obj_remove_style_all(b);
+    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(b, 10, 0);
-    lv_obj_set_style_shadow_width(b, 0, 0);
     lv_obj_set_style_border_width(b, 1, 0);
-    lv_obj_set_style_border_color(b, lv_color_hex(C_LINE), 0);
     lv_obj_set_style_pad_all(b, 6, 0);
+    lv_obj_set_style_opa(b, LV_OPA_70, LV_STATE_PRESSED);
     lv_obj_t *l = mk_label(b, font, C_TEXT, text);
     lv_obj_center(l);
+    btn_set_on(b, false);
     if (cb) {
         lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, user);
     }
@@ -84,8 +89,12 @@ lv_obj_t *mk_btn(lv_obj_t *parent, const char *text, const lv_font_t *font, lv_e
 
 void btn_set_on(lv_obj_t *btn, bool on)
 {
-    lv_obj_set_style_bg_color(btn, lv_color_hex(on ? C_ACCENT : C_CARD2), 0);
-    lv_obj_set_style_border_color(btn, lv_color_hex(on ? C_BLUE : C_LINE), 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(on ? C_ACCENT : C_BTN), 0);
+    lv_obj_set_style_border_color(btn, lv_color_hex(on ? 0x7FB0FF : C_BTN_LINE), 0);
+    lv_obj_t *l = lv_obj_get_child(btn, 0);
+    if (l) {
+        lv_obj_set_style_text_color(l, lv_color_hex(on ? 0xFFFFFF : 0xDCE3EE), 0);
+    }
 }
 
 static void on_link(lv_event_t *e)
@@ -381,7 +390,7 @@ static void bar_name(void)
 static void bar_build(lv_obj_t *scr)
 {
     s_bar = mk_box(scr, 0, 0, SCR_W, BAR_H);
-    lv_obj_set_style_bg_color(s_bar, lv_color_hex(0x1C2949), 0);
+    lv_obj_set_style_bg_color(s_bar, lv_color_hex(0x0B1220), 0);
     lv_obj_set_style_bg_opa(s_bar, LV_OPA_COVER, 0);
     lv_obj_set_style_border_side(s_bar, LV_BORDER_SIDE_BOTTOM, 0);
     lv_obj_set_style_border_width(s_bar, 1, 0);
@@ -398,21 +407,26 @@ static void bar_build(lv_obj_t *scr)
     s_name = mk_label(s_bar, &font_kr_22, C_TEXT, "");
     lv_obj_set_pos(s_name, 66, 20);
     lv_label_set_long_mode(s_name, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(s_name, 150);
+    lv_obj_set_size(s_name, 168, 26);   /* 한 줄 */
 
-    /* 메뉴: 글자 길이만큼 넓게, 사이를 조금씩 띄웁니다 */
-    static const int TAB_W[PG_COUNT] = { 58, 94, 94, 64, 78, 64, 64 };
-    int tw = 8;
+    /* 메뉴: 칸마다 글자 너비 + 좌우 여백이 같게 */
+    const int tab_pad = 24, tab_gap = 2;
+    int tab_w[PG_COUNT], tw = 8 - tab_gap;
     for (int i = 0; i < PG_COUNT; i++) {
-        tw += TAB_W[i] + (i ? 4 : 0);
+        lv_point_t sz;
+        lv_txt_get_size(&sz, TAB_NAMES[i], &font_kr_18, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        tab_w[i] = sz.x + tab_pad;
+        tw += tab_w[i] + tab_gap;
     }
-    lv_obj_t *tabs = mk_box(s_bar, 224, 8, tw, 48);
+    lv_obj_t *tabs = mk_box(s_bar, 244, 8, tw, 48);
     lv_obj_set_style_bg_color(tabs, lv_color_hex(C_CARD), 0);
     lv_obj_set_style_bg_opa(tabs, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(tabs, 12, 0);
-    for (int i = 0, x = 4; i < PG_COUNT; x += TAB_W[i] + 4, i++) {
-        lv_obj_t *t = mk_box(tabs, x, 4, TAB_W[i], 40);
-        lv_obj_set_style_radius(t, 10, 0);
+    lv_obj_set_style_border_width(tabs, 1, 0);
+    lv_obj_set_style_border_color(tabs, lv_color_hex(C_LINE), 0);
+    for (int i = 0, x = 4; i < PG_COUNT; x += tab_w[i] + tab_gap, i++) {
+        lv_obj_t *t = mk_box(tabs, x, 4, tab_w[i], 40);
+        lv_obj_set_style_radius(t, 9, 0);
         lv_obj_set_style_bg_color(t, lv_color_hex(C_ACCENT), 0);
         lv_obj_add_flag(t, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(t, on_tab, LV_EVENT_CLICKED, (void *)(intptr_t)i);
@@ -420,18 +434,17 @@ static void bar_build(lv_obj_t *scr)
         s_tabs[i] = t;
     }
 
-    /* 오른쪽: [받은 시각 / 날짜] [시계] */
+    /* 오른쪽:  [와이파이 배터리]  [시계 / 날짜] */
     s_clock = mk_label(s_bar, &font_kr_36, C_TEXT, "");
-    lv_obj_align(s_clock, LV_ALIGN_RIGHT_MID, -14, 0);
-    s_status = mk_label(s_bar, &font_kr_18, C_GREEN, "");
-    lv_obj_set_width(s_status, 140);
-    lv_obj_set_style_text_align(s_status, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_label_set_long_mode(s_status, LV_LABEL_LONG_CLIP);
-    lv_obj_align(s_status, LV_ALIGN_TOP_RIGHT, -116, 9);
+    lv_obj_align(s_clock, LV_ALIGN_TOP_RIGHT, -14, -2);
     s_date = mk_label(s_bar, &font_kr_18, C_DIM, "");
-    lv_obj_set_width(s_date, 140);
-    lv_obj_set_style_text_align(s_date, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_align(s_date, LV_ALIGN_TOP_RIGHT, -116, 35);
+    lv_obj_align(s_date, LV_ALIGN_TOP_RIGHT, -14, 40);
+    s_batt = mk_label(s_bar, &font_kr_18, C_TEXT, "");
+    lv_obj_set_width(s_batt, 74);
+    lv_obj_set_style_text_align(s_batt, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_align(s_batt, LV_ALIGN_RIGHT_MID, -136, 0);
+    s_status = mk_label(s_bar, &font_kr_18, C_GREEN, LV_SYMBOL_WIFI);
+    lv_obj_align(s_status, LV_ALIGN_RIGHT_MID, -216, 0);
     bar_name();
 }
 
@@ -513,12 +526,45 @@ static void screen_power(void)
     }
 }
 
+/* ---------------- 배터리 ----------------
+ *  IO 확장 칩의 ADC(10비트, 3.3V)에 배터리 전압이 1/3 로 나뉘어 들어옵니다.
+ *  2.5V 아래면 배터리가 없는 것으로 보고 숨깁니다. */
+
+static void battery(void)
+{
+    static int n;
+    if (n++ % 30) {
+        return;
+    }
+    uint16_t raw = IO_EXTENSION_Adc_Input();
+    float v = raw * 3.3f * 3.0f / 1023.0f;
+    if (n == 1) {
+        ESP_LOGI("ui", "배터리 ADC %u -> %.2fV", raw, v);
+    }
+    char buf[24] = "";
+    uint32_t color = C_TEXT;
+    if (v >= 2.5f && v < 5.5f) {
+        int pct = (int)((v - 3.3f) * 100.0f / (4.15f - 3.3f));
+        pct = pct < 0 ? 0 : pct > 100 ? 100 : pct;
+        const char *sym = pct > 80 ? LV_SYMBOL_BATTERY_FULL : pct > 55 ? LV_SYMBOL_BATTERY_3
+                        : pct > 30 ? LV_SYMBOL_BATTERY_2 : pct > 10 ? LV_SYMBOL_BATTERY_1 : LV_SYMBOL_BATTERY_EMPTY;
+        snprintf(buf, sizeof(buf), "%s %d%%", sym, pct);
+        color = pct <= 20 ? C_RED : C_GREEN;
+    }
+    if (strcmp(buf, g_batt_text)) {
+        strlcpy(g_batt_text, buf, sizeof(g_batt_text));
+        label_set(s_batt, buf);
+        lv_obj_set_style_text_color(s_batt, lv_color_hex(color), 0);
+        home_refresh(-1);
+    }
+}
+
 static void tick(lv_timer_t *t)
 {
+    battery();
     char clock[16], date[32];
     clock_texts(clock, sizeof(clock), date, sizeof(date));
     label_set(s_clock, clock);
-    lv_obj_align(s_clock, LV_ALIGN_RIGHT_MID, -14, 0);
     label_set(s_date, date);
 
     int today = ymd_today();
@@ -558,7 +604,7 @@ static void status_text(void)
     }
     if (strcmp(buf, g_status_text)) {
         strlcpy(g_status_text, buf, sizeof(g_status_text));
-        label_set(s_status, buf);
+        /* 위쪽 줄에는 와이파이 그림만 (색으로 상태) */
         lv_obj_set_style_text_color(s_status, lv_color_hex(s_connected ? C_GREEN : C_WARM), 0);
         home_refresh(-1);
     }

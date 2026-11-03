@@ -5,7 +5,7 @@ idf_component_register(
          "ui.c" "ui_home.c" "ui_find.c" "ui_pages.c" "ui_settings.c" ${FONT_SRCS}
     INCLUDE_DIRS "." "fonts"
     REQUIRES rgb_lcd_port esp_wifi esp_netif esp_event nvs_flash esp_http_client
-             esp-tls mbedtls json driver esp_driver_uart spiffs
+             esp-tls mbedtls json driver esp_driver_uart spiffs io_extension
 )
 
 idf_build_get_property(build_components BUILD_COMPONENTS)
