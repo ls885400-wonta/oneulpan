@@ -1,31 +1,31 @@
 /* 홈 화면 (위쪽 줄 없이 꽉 차게)
  *
- *  ┌ 시계 · 날짜 · 요일 (누르면 메뉴) ┐ ┌ 황인환 선생님 오늘 시간표 ───┐
- *  ├ 날씨 · 미세먼지 · 5일 ───────────┤ │ 1교시  공강                  │
- *  ├ 내 일정 ─────────────────────────┤ │ 2교시  정보           104    │
- *  ├ 점심 · 저녁 (한 줄씩) ───────────┤ ├ 학교 일정 (오늘) ────────────┤
- *  └──────────────────────────────────┘ └──────────────────────────────┘
- *  왼쪽과 오른쪽이 화면을 반씩 나눕니다.
+ *  ┌ 시계 · 날짜 · 요일 (누르면 메뉴) ──────┐ ┌ 황인환 선생님 오늘 ┐
+ *  ├ 날씨 · 미세먼지 · 5일 ─┬ 내 일정 ──────┤ │ 1교시  공강        │
+ *  ├ 점심 ───────────────────┴───────────────┤ │ 2교시  정보   104  │
+ *  │ 저녁                                    │ ├ 학교 일정 (오늘) ──┤
+ *  └ 다음 수업까지 남은 시간 ────────────────┘ └────────────────────┘
+ *  시간표는 화면 폭의 1/3
  */
 #include <stdlib.h>
 
 #include "ui_priv.h"
 
-#define RIGHT_W ((SCR_W - PAD * 3) / 2)
+#define RIGHT_W ((SCR_W - PAD * 3) / 3)
 #define LEFT_W (SCR_W - PAD * 3 - RIGHT_W)
 #define RIGHT_X (PAD + LEFT_W + PAD)
 #define CLOCK_H 150
 #define ROW2_Y (PAD + CLOCK_H + PAD)
-#define ROW2_H 196
-#define WEATHER_W LEFT_W
-#define MEAL_H 74
-#define MEAL_Y (SCR_H - PAD - MEAL_H)
-#define MY_Y (ROW2_Y + ROW2_H + PAD)
-#define MY_H (MEAL_Y - PAD - MY_Y)
+#define ROW2_H 204
+#define WEATHER_W 330
+#define MEAL_Y (ROW2_Y + ROW2_H + PAD)
+#define MEAL_H 150
+#define NEXT_Y (MEAL_Y + MEAL_H + PAD)
+#define NEXT_H (SCR_H - PAD - NEXT_Y)
 #define SCHOOL_H 150
 #define TT_H (SCR_H - PAD * 3 - SCHOOL_H)
 #define WX_DAYS 5
-#define MY_LINES 3
+#define MY_LINES 5
 #define TT_ROWS (TT_PERIODS + 1)   /* 교시 + 점심 */
 #define SCHOOL_LINES 4
 #define LESSON_MIN 50
@@ -35,6 +35,7 @@ static lv_obj_t *s_weather, *s_w_icon, *s_w_temp, *s_w_cond, *s_w_range, *s_w_du
 static lv_obj_t *s_w_day[WX_DAYS], *s_w_day_icon[WX_DAYS], *s_w_day_t[WX_DAYS];
 static lv_obj_t *s_my, *s_my_line[MY_LINES];
 static lv_obj_t *s_meal, *s_lunch_name, *s_lunch, *s_dinner_row, *s_dinner;
+static lv_obj_t *s_next, *s_next_text;
 static lv_obj_t *s_tt_card, *s_tt_title, *s_tt_sub, *s_tt_msg;
 static lv_obj_t *s_tt_row[TT_ROWS], *s_tt_badge[TT_ROWS], *s_tt_btext[TT_ROWS], *s_tt_subj[TT_ROWS], *s_tt_room[TT_ROWS];
 static lv_obj_t *s_school, *s_school_line[SCHOOL_LINES];
@@ -92,17 +93,18 @@ static void build_clock(lv_obj_t *page)
     lv_obj_align(s_time, LV_ALIGN_LEFT_MID, 0, 2);
     s_ampm = mk_label(c, &font_kr_22, C_DIM, "");
     s_date = mk_label(c, &font_kr_36, C_SKY, "");
-    lv_obj_set_pos(s_date, 262, 0);
+    lv_obj_set_pos(s_date, 330, 26);
     s_wday = mk_label(c, &font_kr_36, C_TEXT, "");
-    lv_obj_set_pos(s_wday, 262, 44);
-    /* 와이파이 · 받은 시각 · 배터리는 아래 오른쪽 */
+    lv_obj_set_pos(s_wday, 330, 72);
     s_status = mk_label(c, &font_kr_18, C_GREEN, "");
-    lv_obj_align(s_status, LV_ALIGN_BOTTOM_RIGHT, 0, 2);
+    lv_obj_align(s_status, LV_ALIGN_TOP_RIGHT, -40, -2);
     lv_obj_t *gear = mk_label(c, &lv_font_montserrat_24, C_DIM, LV_SYMBOL_SETTINGS);
     lv_obj_add_flag(gear, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_ext_click_area(gear, 16);
     lv_obj_add_event_cb(gear, on_settings, LV_EVENT_CLICKED, NULL);
     lv_obj_align(gear, LV_ALIGN_TOP_RIGHT, 0, -4);
+    lv_obj_t *hint = mk_label(c, &font_kr_18, C_DIM, "누르면 메뉴 " LV_SYMBOL_RIGHT);
+    lv_obj_align(hint, LV_ALIGN_BOTTOM_RIGHT, 0, 2);
 }
 
 static void build_weather(lv_obj_t *page)
@@ -135,13 +137,14 @@ static void build_weather(lv_obj_t *page)
 
 static void build_my(lv_obj_t *page)
 {
-    lv_obj_t *c = s_my = mk_card(page, PAD, MY_Y, LEFT_W, MY_H);
+    int x = PAD + WEATHER_W + PAD;
+    int w = LEFT_W - WEATHER_W - PAD;
+    lv_obj_t *c = s_my = mk_card(page, x, ROW2_Y, w, ROW2_H);
     card_link(c, PG_CAL);
-    lv_obj_set_style_pad_ver(c, 10, 0);
     mk_label(c, &font_kr_22, C_SKY, "내 일정");
     lv_obj_align(mk_link(c, "캘린더", PG_CAL), LV_ALIGN_TOP_RIGHT, 0, 2);
     for (int i = 0; i < MY_LINES; i++) {
-        s_my_line[i] = dot_label(c, 0, 34 + i * 26, LEFT_W - 28);
+        s_my_line[i] = dot_label(c, 0, 38 + i * 27, w - 28);
     }
 }
 
@@ -153,11 +156,11 @@ static lv_obj_t *meal_row(lv_obj_t *card, const char *name, uint32_t color, lv_o
     lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
     lv_obj_t *n = mk_label(r, &font_kr_18, color, name);
     lv_obj_set_width(n, 84);
-    /* 한 줄만, 넘치면 … (자세한 건 급식 화면에서) */
     lv_obj_t *t = mk_label(r, &font_kr_18, C_TEXT, "");
-    lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
+    lv_label_set_long_mode(t, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(t, 88, 0);
     lv_obj_set_width(t, LEFT_W - 28 - 88);
+    lv_obj_set_style_text_line_space(t, 3, 0);
     if (name_label) {
         *name_label = n;
     }
@@ -170,11 +173,24 @@ static void build_meal(lv_obj_t *page)
     lv_obj_t *c = s_meal = mk_card(page, PAD, MEAL_Y, LEFT_W, MEAL_H);
     card_link(c, PG_MEAL);
     lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_ver(c, 9, 0);
-    lv_obj_set_style_pad_row(c, 6, 0);
+    lv_obj_set_style_pad_ver(c, 10, 0);
+    lv_obj_set_style_pad_row(c, 16, 0);
     meal_row(c, "점심", C_WARM, &s_lunch_name, &s_lunch);
     s_dinner_row = meal_row(c, "저녁", C_SKY, NULL, &s_dinner);
     label_set(s_lunch, g_cfg.school[0] ? "급식 받는 중…" : "설치 페이지에서 학교를 고르면 급식이 나옵니다.");
+}
+
+/* 급식 아래: 다음 수업까지 남은 시간 */
+static void build_next(lv_obj_t *page)
+{
+    lv_obj_t *c = s_next = mk_card(page, PAD, NEXT_Y, LEFT_W, NEXT_H);
+    card_link(c, PG_FIND);
+    lv_obj_set_style_pad_ver(c, 0, 0);
+    s_next_text = mk_label(c, &font_kr_26, C_TEXT, "");
+    lv_label_set_recolor(s_next_text, true);
+    lv_label_set_long_mode(s_next_text, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(s_next_text, LEFT_W - 28);
+    lv_obj_align(s_next_text, LV_ALIGN_LEFT_MID, 0, 0);
 }
 
 static void build_tt(lv_obj_t *page)
@@ -239,6 +255,7 @@ void home_build(lv_obj_t *page)
     build_weather(page);
     build_my(page);
     build_meal(page);
+    build_next(page);
     build_tt(page);
     build_school(page);
 
@@ -401,12 +418,64 @@ static void tt_row(int i, const char *badge, uint32_t badge_bg, const char *subj
     lv_obj_set_style_opa(s_tt_row[i], LV_OPA_COVER, 0);
 }
 
+/* 지금 수업 중이면 끝날 때까지, 아니면 다음 수업 들어갈 때까지 남은 시간 */
+static void refresh_next(const teachers_t *ts, int ti)
+{
+    show_or_hide(s_next, config_show('t'));
+    char buf[200];
+    int today = ymd_today();
+    if (!ts || ti < 0) {
+        label_set(s_next_text, "#A3AFC4 선생님을 고르면 다음 수업까지 남은 시간이 나옵니다#");
+        return;
+    }
+    if (!is_school_day(today)) {
+        label_set(s_next_text, "#A3AFC4 오늘은 수업이 없습니다#");
+        return;
+    }
+    const teacher_t *t = &ts->t[ti];
+    int d = ymd_wday(today) - 1;
+    int m = now_minute();
+    int cur = -1, nxt = -1;
+    for (int p = 0; p < TT_PERIODS; p++) {
+        int st = ts->ptime[p];
+        if (!t->subj[d][p][0]) {
+            continue;
+        }
+        if (m >= st && m < st + LESSON_MIN) {
+            cur = p;
+        } else if (st > m && nxt < 0) {
+            nxt = p;
+        }
+    }
+    if (cur >= 0) {
+        snprintf(buf, sizeof(buf), "#FF7A90 지금 %d교시 %s# 수업 중 · #FFB547 %d분 남음#",
+                 cur + 1, t->subj[d][cur], ts->ptime[cur] + LESSON_MIN - m);
+    } else if (nxt >= 0) {
+        int left = ts->ptime[nxt] - m;
+        char when[32], room[48] = "";
+        if (left >= 60) {
+            snprintf(when, sizeof(when), "%d시간 %d분 뒤", left / 60, left % 60);
+        } else {
+            snprintf(when, sizeof(when), "%d분 뒤", left);
+        }
+        if (t->room[d][nxt][0]) {
+            snprintf(room, sizeof(room), " (%s)", t->room[d][nxt]);
+        }
+        snprintf(buf, sizeof(buf), "#A3AFC4 다음 수업# %d교시 %s%s · #%s %s#",
+                 nxt + 1, t->subj[d][nxt], room, left <= 5 ? "FF7A90" : "FFB547", when);
+    } else {
+        strlcpy(buf, "#5BD6A0 오늘 수업이 모두 끝났습니다#", sizeof(buf));
+    }
+    label_set(s_next_text, buf);
+}
+
 /* 오늘(수업 없는 날이면 다음 수업일) 시간표를 교시마다 한 줄로. 점심시간도 한 줄. */
 static void refresh_tt(void)
 {
     show_or_hide(s_tt_card, config_show('t'));
     const teachers_t *ts = g_data.teachers;
     int ti = teachers_find(g_cfg.owner);
+    refresh_next(ts, ti);
     char buf[64];
     if (g_cfg.owner[0]) {
         snprintf(buf, sizeof(buf), "%s 선생님", g_cfg.owner);
@@ -515,7 +584,7 @@ void home_refresh(int kind)
         char buf[96];
         snprintf(buf, sizeof(buf), "%s%s%s", g_status_text, g_batt_text[0] ? "   " : "", g_batt_text);
         label_set(s_status, buf);
-        lv_obj_align(s_status, LV_ALIGN_BOTTOM_RIGHT, 0, 2);
+        lv_obj_align(s_status, LV_ALIGN_TOP_RIGHT, -40, -2);
         lv_obj_set_style_text_color(s_status, lv_color_hex(strstr(g_status_text, "받음") || strstr(g_status_text, "연결됨") ? C_GREEN : C_WARM), 0);
         return;
     }
