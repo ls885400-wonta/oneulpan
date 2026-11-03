@@ -363,10 +363,12 @@ void school_build(lv_obj_t *page)
 void school_refresh(void)
 {
     int today = ymd_today();
-    if (!s_month) {
+    /* 켜자마자(인터넷 시간 맞추기 전)는 1970년이라 그 달에 붙박이지 않게
+     * 2025년 이전 값이면 오늘로 다시 잡습니다 */
+    if (s_month < 202501) {
         s_month = today / 100;
     }
-    if (!s_school_sel) {
+    if (s_school_sel < 20250101) {
         s_school_sel = today;
     }
     char buf[48];

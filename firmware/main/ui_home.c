@@ -18,10 +18,10 @@
 #define RIGHT_X (PAD + LEFT_W + PAD)
 #define CLOCK_H 150
 #define ROW2_Y (PAD + CLOCK_H + PAD)
-#define ROW2_H 204
+#define ROW2_H 230
 #define WEATHER_W 330
 #define MEAL_Y (ROW2_Y + ROW2_H + PAD)
-#define MEAL_H 150
+#define MEAL_H 124
 #define NEXT_Y (MEAL_Y + MEAL_H + PAD)
 #define NEXT_H (SCR_H - PAD - NEXT_Y)
 #define SCHOOL_H 150
@@ -183,8 +183,8 @@ static void build_meal(lv_obj_t *page)
     lv_obj_t *c = s_meal = mk_card(page, PAD, MEAL_Y, LEFT_W, MEAL_H);
     card_link(c, PG_MEAL);
     lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_ver(c, 10, 0);
-    lv_obj_set_style_pad_row(c, 16, 0);
+    lv_obj_set_style_pad_ver(c, 8, 0);
+    lv_obj_set_style_pad_row(c, 12, 0);
     meal_row(c, "점심", C_WARM, &s_lunch_name, &s_lunch);
     s_dinner_row = meal_row(c, "저녁", C_SKY, NULL, &s_dinner);
     label_set(s_lunch, g_cfg.school[0] ? "급식 받는 중…" : "설치 페이지에서 학교를 고르면 급식이 나옵니다.");

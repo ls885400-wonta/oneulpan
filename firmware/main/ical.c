@@ -99,6 +99,7 @@ typedef struct {
     int today;
     int window;
     bool in_event;
+    int total, last_day; /* 파일 안 일정 수, 가장 늦게 시작하는 날 (진단용) */
     vevent_t e;
     char cur[1024];
     size_t cur_len;
@@ -317,6 +318,10 @@ static void handle_property(parser_t *p, char *line)
         return;
     }
     if (!strcmp(line, "END:VEVENT")) {
+        p->total++;
+        if (p->e.start_day > p->last_day || p->e.freq != F_NONE) {
+            p->last_day = p->e.freq != F_NONE ? INT_MAX : p->e.start_day;
+        }
         finish_event(p);
         p->in_event = false;
         return;
@@ -435,7 +440,15 @@ bool ical_fetch(const char *url, calendar_t *out, int days)
         out->ev[i] = p->found[i].ev;
     }
     out->ok = true;
-    ESP_LOGI(TAG, "일정 %d개", kept);
+    /* 파일에 일정이 있어도 앞으로 것이 없으면 0개: 어떤 캘린더인지 알 수 있게 남깁니다 */
+    int ly = 0, lm = 0, ld = 0;
+    if (p->last_day > 0 && p->last_day != INT_MAX) {
+        civil_from_days(p->last_day, &ly, &lm, &ld);
+    }
+    const char *id = strstr(url, "/ical/");
+    ESP_LOGI(TAG, "일정 %d개 (파일 안 %d개, 마지막 %s%04d-%02d-%02d, %.*s)", kept, p->total,
+             p->last_day == INT_MAX ? "반복 있음 " : "", ly, lm, ld,
+             id ? (int)strcspn(id + 6, "/") : 0, id ? id + 6 : "");
     free(p);
     return true;
 }
