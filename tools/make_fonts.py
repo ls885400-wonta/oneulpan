@@ -19,12 +19,12 @@ HANGUL = "".join(
 )
 EXTRA = "·°℃~※→←↑↓…★☆○●◆■□△▲▽▼「」『』《》〈〉【】①②③④⑤⑥⑦⑧⑨"
 FULL = ASCII + HANGUL + EXTRA
-DATE = "0123456789 ,.:년월일요화수목금토오전후늘내"
+DATE = "0123456789 ,.:-/()년월일요화수목금토오전후늘내"
 
 # (C 이름, TTF, 크기 px, 글자 모음, 기호용 대체 글꼴)
 FONTS = [
-    ("font_kr_18", "NanumGothic-Regular.ttf", 18, FULL, "lv_font_montserrat_16"),
-    ("font_kr_22", "NanumGothic-Regular.ttf", 22, FULL, "lv_font_montserrat_20"),
+    ("font_kr_18", "NanumGothic-Bold.ttf", 18, FULL, "lv_font_montserrat_16"),
+    ("font_kr_22", "NanumGothic-Bold.ttf", 22, FULL, "lv_font_montserrat_20"),
     ("font_kr_26", "NanumGothic-Bold.ttf", 26, FULL, "lv_font_montserrat_24"),
     ("font_kr_36", "NanumGothic-Bold.ttf", 36, DATE, None),
     ("font_num_60", "NanumGothic-Bold.ttf", 60, "0123456789-.°% ", None),

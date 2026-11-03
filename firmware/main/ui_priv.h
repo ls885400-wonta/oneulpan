@@ -49,6 +49,13 @@ lv_obj_t *mk_link(lv_obj_t *parent, const char *text, int page);
 lv_obj_t *mk_list(lv_obj_t *parent, int x, int y, int w, int h);
 void label_set(lv_obj_t *label, const char *text);  /* 같으면 그대로 */
 
+/* 날씨 그림 (code = WMO 날씨 코드) */
+lv_obj_t *mk_wx_icon(lv_obj_t *parent, int size);
+void wx_icon_set(lv_obj_t *icon, int code);
+/* 시계를 누르면 나오는 메뉴, 달력 칸을 누르면 나오는 자세히 */
+void ui_menu_open(void);
+void ui_popup(const char *title, const char *body);
+
 /* 글자 만들기 */
 const char *weather_text(int code);
 uint32_t weather_color(int code);
@@ -57,6 +64,8 @@ void dust_text(int pm10, int pm25, char *buf, size_t size, uint32_t *color);
 void join_menu(const char *menu, const char *sep, char *buf, size_t size);
 void date_text(int ymd, char *buf, size_t size);   /* "11월 3일 (화)" */
 int now_minute(void);
+/* 수업하는 날인지 (주말·휴일이 아니면) */
+bool is_school_day(int ymd);
 
 /* 일주일 시간표 표 */
 typedef struct {

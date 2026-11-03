@@ -43,7 +43,9 @@ void tt_grid_create(tt_grid_t *g, lv_obj_t *parent, int x, int y, int w, int h)
         g->head[d] = mk_label(g->box, &font_kr_18, C_DIM, "");
         lv_obj_set_width(g->head[d], cw);
         lv_obj_set_style_text_align(g->head[d], LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_set_pos(g->head[d], pw + gap + d * (cw + gap), 2);
+        lv_obj_set_pos(g->head[d], pw + gap + d * (cw + gap), 0);
+        lv_obj_set_style_radius(g->head[d], 6, 0);
+        lv_obj_set_style_pad_ver(g->head[d], 2, 0);
     }
     for (int p = 0; p < TT_PERIODS; p++) {
         int cy = hh + p * (ch + gap);
@@ -51,6 +53,8 @@ void tt_grid_create(tt_grid_t *g, lv_obj_t *parent, int x, int y, int w, int h)
         lv_obj_set_width(g->plabel[p], pw);
         lv_obj_set_style_text_align(g->plabel[p], LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_line_space(g->plabel[p], -2, 0);
+        lv_obj_set_style_radius(g->plabel[p], 8, 0);
+        lv_obj_set_style_pad_ver(g->plabel[p], 2, 0);
         lv_obj_align_to(g->plabel[p], g->box, LV_ALIGN_TOP_LEFT, 0, cy + ch / 2 - 21);
         for (int d = 0; d < TT_DAYS; d++) {
             lv_obj_t *c = mk_box(g->box, pw + gap + d * (cw + gap), cy, cw, ch);
@@ -97,6 +101,10 @@ void tt_grid_fill(tt_grid_t *g, int teacher)
         int st = ts ? ts->ptime[p] : 0;
         snprintf(buf, sizeof(buf), "%d교시\n%02d:%02d", p + 1, st / 60, st % 60);
         label_set(g->plabel[p], ts ? buf : "");
+        bool now_p = p == cur && is_school_day(today);
+        lv_obj_set_style_bg_opa(g->plabel[p], now_p ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+        lv_obj_set_style_bg_color(g->plabel[p], lv_color_hex(C_RED), 0);
+        lv_obj_set_style_text_color(g->plabel[p], lv_color_hex(now_p ? 0xFFFFFF : C_DIM), 0);
     }
     for (int d = 0; d < TT_DAYS; d++) {
         int ymd = ymd_add(monday, d);
@@ -105,7 +113,9 @@ void tt_grid_fill(tt_grid_t *g, int teacher)
         bool is_today = ymd == today;
         snprintf(buf, sizeof(buf), "%s %d/%d", WEEKDAYS[d + 1], ymd / 100 % 100, ymd % 100);
         label_set(g->head[d], buf);
-        lv_obj_set_style_text_color(g->head[d], lv_color_hex(holiday ? C_RED : is_today ? C_GREEN : C_DIM), 0);
+        lv_obj_set_style_text_color(g->head[d], lv_color_hex(is_today ? 0xFFFFFF : holiday ? C_PINK : C_DIM), 0);
+        lv_obj_set_style_bg_opa(g->head[d], is_today ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+        lv_obj_set_style_bg_color(g->head[d], lv_color_hex(C_RED), 0);
 
         for (int p = 0; p < TT_PERIODS; p++) {
             lv_obj_t *c = g->cell[d][p];

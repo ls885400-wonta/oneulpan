@@ -339,7 +339,7 @@ static void feeds_task(void *arg)
             }
             if (g_cfg.ical[0] && (force || new_day || now - last_cal > 15 * MIN)) {
                 calendar_t *c = psram(sizeof(*c));
-                if (c && ical_fetch(g_cfg.ical, c, 14)) {
+                if (c && ical_fetch(g_cfg.ical, c, 35)) {
                     last_cal = now;
                     feeds_swap(D_MYCAL, c);
                 } else {

@@ -187,6 +187,173 @@ int now_minute(void)
     return tm.tm_hour * 60 + tm.tm_min;
 }
 
+bool is_school_day(int ymd)
+{
+    int wd = ymd_wday(ymd);
+    bool holiday;
+    school_day_info(ymd, &holiday);
+    return wd != 0 && wd != 6 && !holiday;
+}
+
+/* ---------------- 날씨 그림 ----------------
+ *  해 · 구름 · 비 · 눈 · 번개를 동그라미와 막대로 그립니다 (그림 파일 없이). */
+
+static lv_obj_t *dot(lv_obj_t *parent, int x, int y, int w, int h, uint32_t color)
+{
+    lv_obj_t *o = mk_box(parent, x, y, w, h);
+    lv_obj_set_style_radius(o, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(o, lv_color_hex(color), 0);
+    lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
+    return o;
+}
+
+lv_obj_t *mk_wx_icon(lv_obj_t *parent, int size)
+{
+    lv_obj_t *b = mk_box(parent, 0, 0, size, size);
+    lv_obj_set_style_clip_corner(b, false, 0);
+    return b;
+}
+
+void wx_icon_set(lv_obj_t *icon, int code)
+{
+    lv_obj_clean(icon);
+    int s = lv_obj_get_width(icon);
+    bool sun = code <= 2;
+    bool cloud = code >= 1;
+    bool rain = (code >= 51 && code <= 67) || (code >= 80 && code <= 82);
+    bool snow = (code >= 71 && code <= 77) || code == 85 || code == 86;
+    bool storm = code >= 95;
+    if (sun) {
+        int d = cloud ? s * 46 / 100 : s * 60 / 100;
+        int x = cloud ? s * 8 / 100 : (s - d) / 2;
+        int y = cloud ? s * 6 / 100 : (s - d) / 2;
+        lv_obj_t *o = dot(icon, x, y, d, d, C_WARM);
+        lv_obj_set_style_shadow_width(o, s / 4, 0);
+        lv_obj_set_style_shadow_color(o, lv_color_hex(C_WARM), 0);
+        lv_obj_set_style_shadow_opa(o, LV_OPA_40, 0);
+    }
+    if (!cloud) {
+        return;
+    }
+    uint32_t cc = code >= 45 && !sun ? 0xC9D3E3 : 0xE6ECF5;
+    int up = (rain || snow || storm) ? s * 14 / 100 : 0;
+    dot(icon, s * 26 / 100, s * 22 / 100 - up, s * 40 / 100, s * 40 / 100, cc);
+    dot(icon, s * 48 / 100, s * 32 / 100 - up, s * 32 / 100, s * 32 / 100, cc);
+    dot(icon, s * 8 / 100, s * 44 / 100 - up, s * 84 / 100, s * 28 / 100, cc);
+    int y = s * 76 / 100 - up;
+    for (int i = 0; i < 3; i++) {
+        int x = s * (26 + i * 20) / 100;
+        if (rain) {
+            dot(icon, x, y, s / 14 + 1, s * 22 / 100, C_BLUE);
+        } else if (snow) {
+            dot(icon, x, y + s / 20, s / 8, s / 8, 0xFFFFFF);
+        } else if (storm && i == 1) {
+            dot(icon, x, y, s / 10, s * 24 / 100, C_WARM);
+        }
+    }
+}
+
+/* ---------------- 메뉴 (홈에서 시계를 누르면) ---------------- */
+
+static lv_obj_t *s_menu;
+
+static void menu_close(void)
+{
+    if (s_menu) {
+        lv_obj_del(s_menu);
+        s_menu = NULL;
+    }
+}
+
+static void on_menu_bg(lv_event_t *e)
+{
+    if (lv_event_get_target(e) == s_menu) {
+        menu_close();
+    }
+}
+
+static void on_menu_item(lv_event_t *e)
+{
+    int page = (int)(intptr_t)lv_event_get_user_data(e);
+    menu_close();
+    ui_go(page);
+}
+
+void ui_menu_open(void)
+{
+    static const int PAGES[6] = { PG_SCHOOL, PG_CHA, PG_FIND, PG_CAL, PG_MEAL, PG_SET };
+    static const char *SUB[6] = { "이달 학교 일정", "창의적 체험활동", "선생님 시간표", "내 구글 캘린더", "식단표", "와이파이 · 화면" };
+    static const uint32_t COLORS[6] = { C_PINK, C_GREEN, C_BLUE, C_SKY, C_WARM, C_DIM };
+    menu_close();
+    s_menu = mk_box(lv_layer_top(), 0, 0, SCR_W, SCR_H);
+    lv_obj_set_style_bg_color(s_menu, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_menu, LV_OPA_60, 0);
+    lv_obj_add_flag(s_menu, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_menu, on_menu_bg, LV_EVENT_CLICKED, NULL);
+
+    const int bw = 236, bh = 150, gap = 16;
+    int w = bw * 3 + gap * 2 + 40, h = bh * 2 + gap + 96;
+    lv_obj_t *box = mk_card(s_menu, (SCR_W - w) / 2, (SCR_H - h) / 2, w, h);
+    lv_obj_set_style_pad_all(box, 20, 0);
+    mk_label(box, &font_kr_26, C_TEXT, "메뉴");
+    lv_obj_t *x = mk_label(box, &font_kr_22, C_DIM, "닫기 " LV_SYMBOL_CLOSE);
+    lv_obj_align(x, LV_ALIGN_TOP_RIGHT, 0, 2);
+    lv_obj_add_flag(x, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(x, 16);
+    lv_obj_add_event_cb(x, on_menu_item, LV_EVENT_CLICKED, (void *)(intptr_t)PG_HOME);
+    for (int i = 0; i < 6; i++) {
+        lv_obj_t *b = lv_btn_create(box);
+        lv_obj_set_pos(b, (i % 3) * (bw + gap), 52 + (i / 3) * (bh + gap));
+        lv_obj_set_size(b, bw, bh);
+        lv_obj_set_style_bg_color(b, lv_color_hex(C_CARD2), 0);
+        lv_obj_set_style_radius(b, 16, 0);
+        lv_obj_set_style_shadow_width(b, 0, 0);
+        lv_obj_set_style_border_width(b, 2, 0);
+        lv_obj_set_style_border_side(b, LV_BORDER_SIDE_LEFT, 0);
+        lv_obj_set_style_border_color(b, lv_color_hex(COLORS[i]), 0);
+        lv_obj_add_event_cb(b, on_menu_item, LV_EVENT_CLICKED, (void *)(intptr_t)PAGES[i]);
+        lv_obj_t *t = mk_label(b, &font_kr_26, COLORS[i], TAB_NAMES[PAGES[i]]);
+        lv_obj_align(t, LV_ALIGN_CENTER, 0, -16);
+        lv_obj_t *s = mk_label(b, &font_kr_18, C_DIM, SUB[i]);
+        lv_obj_align(s, LV_ALIGN_CENTER, 0, 22);
+    }
+}
+
+/* ---------------- 하루 자세히 (달력 칸을 누르면) ---------------- */
+
+static lv_obj_t *s_pop;
+
+static void on_pop_close(lv_event_t *e)
+{
+    if (s_pop) {
+        lv_obj_del_async(s_pop);
+        s_pop = NULL;
+    }
+}
+
+void ui_popup(const char *title, const char *body)
+{
+    if (s_pop) {
+        lv_obj_del(s_pop);
+    }
+    s_pop = mk_box(lv_layer_top(), 0, 0, SCR_W, SCR_H);
+    lv_obj_set_style_bg_color(s_pop, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_pop, LV_OPA_60, 0);
+    lv_obj_add_flag(s_pop, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_pop, on_pop_close, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *box = mk_card(s_pop, 172, 90, 680, 420);
+    lv_obj_set_style_pad_all(box, 20, 0);
+    lv_obj_add_flag(box, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(box, on_pop_close, LV_EVENT_CLICKED, NULL);
+    mk_label(box, &font_kr_26, C_TEXT, title);
+    lv_obj_t *x = mk_label(box, &font_kr_18, C_DIM, "누르면 닫힘");
+    lv_obj_align(x, LV_ALIGN_TOP_RIGHT, 0, 4);
+    lv_obj_t *list = mk_list(box, 0, 46, 640, 420 - 40 - 46);
+    lv_obj_t *l = mk_wrap(list, &font_kr_22, C_TEXT, body);
+    lv_label_set_recolor(l, true);
+    lv_obj_set_style_text_line_space(l, 10, 0);
+}
+
 /* ---------------- 위쪽 줄 ---------------- */
 
 static void on_tab(lv_event_t *e)
