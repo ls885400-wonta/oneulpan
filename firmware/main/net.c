@@ -24,6 +24,7 @@ static const char *TAG = "net";
 #define SAVED_MAX 5
 #define ROAM_WEAK (-70)    /* 이보다 약하면 더 센 곳을 찾아봄 */
 #define ROAM_BETTER 8      /* 이만큼(dB) 더 세면 옮겨 감 */
+#define FIRST_OK (-80)     /* 맨 앞(가장 최근에 고른) 와이파이가 이만큼 보이면 그곳부터 */
 
 typedef struct {
     char ssid[33];
@@ -37,6 +38,11 @@ static saved_t s_saved[SAVED_MAX];
 static int s_saved_n;
 static TaskHandle_t s_roam;
 static SemaphoreHandle_t s_scan_lock; /* 찾기는 한 번에 하나만 */
+static SemaphoreHandle_t s_list_lock; /* 저장 목록은 화면과 roam 이 같이 씀 */
+static char s_join[33];               /* 방금 고른 와이파이: 이것부터 붙어 봄 */
+static char s_try[33];                /* 지금 붙어 보는 와이파이 */
+static char s_fail[128];              /* 마지막 실패 ("'이름' 이유") */
+static volatile int s_reason;         /* 마지막으로 끊긴 이유 코드 */
 
 /* ---- 저장된 와이파이 목록 (NVS "board"/"wifis") ---- */
 
@@ -57,7 +63,11 @@ static void saved_store(void)
 {
     nvs_handle_t h;
     if (nvs_open("board", NVS_READWRITE, &h) == ESP_OK) {
-        nvs_set_blob(h, "wifis", s_saved, s_saved_n * sizeof(saved_t));
+        if (s_saved_n > 0) {
+            nvs_set_blob(h, "wifis", s_saved, s_saved_n * sizeof(saved_t));
+        } else {
+            nvs_erase_key(h, "wifis");
+        }
         nvs_commit(h);
         nvs_close(h);
     }
@@ -85,15 +95,79 @@ static void saved_add(const char *ssid, const char *pass)
     strlcpy(s_saved[0].pass, pass, sizeof(s_saved[0].pass));
 }
 
-void net_forget(const char *ssid)
+void net_join(const char *ssid, const char *pass)
 {
-    saved_load();
-    int i = saved_find(ssid);
-    if (i >= 0) {
-        memmove(&s_saved[i], &s_saved[i + 1], (s_saved_n - i - 1) * sizeof(saved_t));
-        s_saved_n--;
-        saved_store();
+    xSemaphoreTake(s_list_lock, portMAX_DELAY);
+    saved_add(ssid, pass);
+    saved_store();
+    xSemaphoreGive(s_list_lock);
+    strlcpy(s_join, ssid, sizeof(s_join));
+    s_fail[0] = 0;
+    ESP_LOGI(TAG, "새 와이파이 '%s' 저장, 연결해 봄", ssid);
+    if (s_connected) {
+        esp_wifi_disconnect(); /* 끊기면 roam 이 새 와이파이부터 붙어 봄 */
+    } else if (s_roam) {
+        xTaskNotifyGive(s_roam);
     }
+}
+
+void net_forget_all(void)
+{
+    xSemaphoreTake(s_list_lock, portMAX_DELAY);
+    s_saved_n = 0;
+    saved_store();
+    xSemaphoreGive(s_list_lock);
+    s_join[0] = s_fail[0] = 0;
+    ESP_LOGI(TAG, "저장된 와이파이 모두 지움");
+    esp_wifi_disconnect();
+}
+
+int net_saved_count(void)
+{
+    return s_saved_n;
+}
+
+const char *net_trying(void)
+{
+    return s_try;
+}
+
+const char *net_fail_text(void)
+{
+    return s_fail;
+}
+
+static const char *reason_text(int r)
+{
+    switch (r) {
+    case WIFI_REASON_AUTH_FAIL:
+    case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
+    case WIFI_REASON_HANDSHAKE_TIMEOUT:
+    case WIFI_REASON_MIC_FAILURE:
+    case WIFI_REASON_802_1X_AUTH_FAILED:
+        return "비밀번호가 맞지 않습니다";
+    case WIFI_REASON_NO_AP_FOUND:
+    case WIFI_REASON_NO_AP_FOUND_IN_RSSI_THRESHOLD:
+        return "와이파이를 찾지 못했습니다";
+    case WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY:
+    case WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD:
+        return "보안 방식이 맞지 않습니다";
+    case 0:
+        return "공유기가 대답하지 않습니다";
+    default:
+        return NULL;
+    }
+}
+
+static void set_fail(const char *ssid, int reason)
+{
+    const char *why = reason_text(reason);
+    if (why) {
+        snprintf(s_fail, sizeof(s_fail), "'%s' %s", ssid, why);
+    } else {
+        snprintf(s_fail, sizeof(s_fail), "'%s' 연결 실패 (%d)", ssid, reason);
+    }
+    ESP_LOGW(TAG, "%s", s_fail);
 }
 
 /* ---- 연결과 로밍 ---- */
@@ -101,6 +175,7 @@ void net_forget(const char *ssid)
 static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        s_reason = ((wifi_event_sta_disconnected_t *)data)->reason;
         s_connected = false;
         s_ip[0] = 0;
         s_ssid[0] = 0;
@@ -122,24 +197,35 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
     }
 }
 
-/* 주변을 찾아 저장된 와이파이 중 가장 센 곳. 없으면 false */
-static bool best_saved(wifi_ap_record_t *best, int *which)
+/* 주변을 찾아 붙을 저장된 와이파이를 고릅니다. 없으면 false
+ *  - 방금 고른 와이파이(s_join)가 있으면 그것만
+ *  - 아니면 맨 앞(가장 최근에 고른 것)이 쓸 만하게 보이면 그것, 아니면 가장 센 곳 */
+static bool best_saved(wifi_ap_record_t *best, saved_t *out)
 {
     bool found = false;
+    int best_score = 0;
     xSemaphoreTake(s_scan_lock, portMAX_DELAY);
     wifi_scan_config_t sc = { .show_hidden = false };
     if (esp_wifi_scan_start(&sc, true) == ESP_OK) {
         uint16_t n = 30;
         wifi_ap_record_t *rec = calloc(n, sizeof(*rec));
         if (rec && esp_wifi_scan_get_ap_records(&n, rec) == ESP_OK) {
+            xSemaphoreTake(s_list_lock, portMAX_DELAY);
             for (int i = 0; i < n; i++) {
-                int k = saved_find((char *)rec[i].ssid);
-                if (k >= 0 && (!found || rec[i].rssi > best->rssi)) {
+                const char *ssid = (char *)rec[i].ssid;
+                int k = saved_find(ssid);
+                if (k < 0 || (s_join[0] && strcmp(ssid, s_join))) {
+                    continue;
+                }
+                int score = rec[i].rssi + (k == 0 && rec[i].rssi >= FIRST_OK ? 100 : 0);
+                if (!found || score > best_score) {
                     *best = rec[i];
-                    *which = k;
+                    *out = s_saved[k];
+                    best_score = score;
                     found = true;
                 }
             }
+            xSemaphoreGive(s_list_lock);
         } else {
             esp_wifi_clear_ap_list();
         }
@@ -149,19 +235,24 @@ static bool best_saved(wifi_ap_record_t *best, int *which)
     return found;
 }
 
-static void connect_to(const wifi_ap_record_t *ap, int k)
+static void connect_to(const wifi_ap_record_t *ap, const saved_t *w)
 {
     wifi_config_t wc = { 0 };
-    strlcpy((char *)wc.sta.ssid, s_saved[k].ssid, sizeof(wc.sta.ssid));
-    strlcpy((char *)wc.sta.password, s_saved[k].pass, sizeof(wc.sta.password));
-    wc.sta.threshold.authmode = s_saved[k].pass[0] ? WIFI_AUTH_WPA_PSK : WIFI_AUTH_OPEN;
+    strlcpy((char *)wc.sta.ssid, w->ssid, sizeof(wc.sta.ssid));
+    strlcpy((char *)wc.sta.password, w->pass, sizeof(wc.sta.password));
+    /* 비밀번호가 있으면 WEP~WPA3 어느 것이든 (공유기마다 달라서) */
+    wc.sta.threshold.authmode = w->pass[0] ? WIFI_AUTH_WEP : WIFI_AUTH_OPEN;
+    wc.sta.pmf_cfg.capable = true;
+    wc.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
     memcpy(wc.sta.bssid, ap->bssid, 6);
     wc.sta.bssid_set = true;
     wc.sta.channel = ap->primary;
     wc.sta.rm_enabled = 1;  /* 같은 이름 공유기끼리 옮겨 다니기 도움 */
     wc.sta.btm_enabled = 1;
     esp_wifi_set_config(WIFI_IF_STA, &wc);
-    ESP_LOGI(TAG, "'%s' 에 연결 (신호 %d)", s_saved[k].ssid, ap->rssi);
+    ESP_LOGI(TAG, "'%s' 에 연결 (신호 %d)", w->ssid, ap->rssi);
+    strlcpy(s_try, w->ssid, sizeof(s_try));
+    s_reason = 0;
     esp_wifi_connect();
 }
 
@@ -169,20 +260,39 @@ static void roam_task(void *arg)
 {
     for (;;) {
         if (!s_connected) {
+            if (s_saved_n == 0) {
+                s_try[0] = 0;
+                ulTaskNotifyTake(pdTRUE, portMAX_DELAY); /* 새로 고를 때까지 */
+                continue;
+            }
             wifi_ap_record_t ap;
-            int k;
+            saved_t w;
+            char join[33];
+            strlcpy(join, s_join, sizeof(join));
             esp_wifi_disconnect();
             vTaskDelay(pdMS_TO_TICKS(200));
             ulTaskNotifyTake(pdTRUE, 0); /* 방금 끊은 알림은 버림 */
-            if (best_saved(&ap, &k)) {
-                connect_to(&ap, k);
+            if (best_saved(&ap, &w)) {
+                connect_to(&ap, &w);
                 /* 붙을 때까지 (또는 실패) 기다림 */
                 ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(20000));
                 if (s_connected) {
+                    s_try[0] = 0;
+                    if (!strcmp(join, w.ssid)) {
+                        s_join[0] = 0;
+                    }
                     continue;
                 }
+                set_fail(w.ssid, s_reason);
+            } else if (join[0]) {
+                set_fail(join, WIFI_REASON_NO_AP_FOUND);
             } else {
                 ESP_LOGW(TAG, "저장된 와이파이가 보이지 않음");
+            }
+            s_try[0] = 0;
+            /* 방금 고른 곳은 한 번 해 보고, 안 되면 다른 저장된 곳도 봄 */
+            if (join[0] && !strcmp(join, s_join)) {
+                s_join[0] = 0;
             }
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10000));
             continue;
@@ -194,14 +304,15 @@ static void roam_task(void *arg)
             continue;
         }
         wifi_ap_record_t ap;
-        int k;
-        if (best_saved(&ap, &k) && ap.rssi >= cur.rssi + ROAM_BETTER && memcmp(ap.bssid, cur.bssid, 6)) {
+        saved_t w;
+        if (best_saved(&ap, &w) && ap.rssi >= cur.rssi + ROAM_BETTER && memcmp(ap.bssid, cur.bssid, 6)) {
             ESP_LOGI(TAG, "신호 약함 (%d) → 더 센 곳으로", cur.rssi);
             esp_wifi_disconnect();
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(3000));
             ulTaskNotifyTake(pdTRUE, 0);
-            connect_to(&ap, k);
+            connect_to(&ap, &w);
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(20000));
+            s_try[0] = 0;
         }
     }
 }
@@ -215,6 +326,7 @@ void net_start(const char *ssid, const char *pass)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_create_default_wifi_sta();
     s_scan_lock = xSemaphoreCreateMutex();
+    s_list_lock = xSemaphoreCreateMutex();
 
     /* 설정의 와이파이는 늘 목록 맨 앞에 */
     saved_load();
@@ -234,8 +346,8 @@ void net_start(const char *ssid, const char *pass)
     ESP_ERROR_CHECK(esp_wifi_start());
     if (s_saved_n == 0) {
         ESP_LOGW(TAG, "와이파이 설정 없음");
-        return;
     }
+    /* 저장된 것이 없어도 띄워 둡니다: 설정 화면에서 고르면 바로 붙음 */
     xTaskCreate(roam_task, "roam", 4096, NULL, 4, &s_roam);
 
     esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");

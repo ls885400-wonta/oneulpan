@@ -41,15 +41,21 @@ static void save_and_apply(void)
 
 static void wifi_info(void)
 {
-    char buf[160];
-    if (g_cfg.ssid[0]) {
-        if (net_connected()) {
-            snprintf(buf, sizeof(buf), "'%s' 에 연결됨 %s · 저장된 곳 중 센 곳으로 자동 연결", net_ssid(), net_ip());
-        } else {
-            snprintf(buf, sizeof(buf), "'%s' 저장됨 · 연결 안 됨", g_cfg.ssid);
-        }
-    } else {
+    char buf[320];
+    int n = net_saved_count();
+    const char *fail = net_fail_text();
+    if (n == 0) {
         strlcpy(buf, "저장된 와이파이가 없습니다. [찾기] 를 눌러 고르세요.", sizeof(buf));
+    } else if (net_connected()) {
+        snprintf(buf, sizeof(buf), "'%s' 에 연결됨 %s · 저장 %d개", net_ssid(), net_ip(), n);
+    } else if (net_trying()[0]) {
+        snprintf(buf, sizeof(buf), "'%s' 에 연결하는 중…", net_trying());
+    } else {
+        snprintf(buf, sizeof(buf), "저장 %d개 · 연결 안 됨 (다시 찾는 중)", n);
+    }
+    if (fail[0]) {
+        size_t o = strlen(buf);
+        snprintf(buf + o, sizeof(buf) - o, "\n#FF7A90 %s#", fail);
     }
     label_set(s_wifi_info, buf);
 }
@@ -65,7 +71,7 @@ static void on_scan(lv_event_t *e)
 static void close_pop(void)
 {
     if (s_pop) {
-        lv_obj_del(s_pop);
+        lv_obj_del_async(s_pop); /* 팝업 안 버튼·자판의 이벤트 안에서 불리므로 나중에 지움 */
         s_pop = NULL;
         s_kb = NULL;
     }
@@ -81,7 +87,9 @@ static void on_pop_connect(lv_event_t *e)
     strlcpy(g_cfg.ssid, s_pop_ssid, sizeof(g_cfg.ssid));
     strlcpy(g_cfg.pass, lv_textarea_get_text(s_pop_ta), sizeof(g_cfg.pass));
     config_save();
-    esp_restart(); /* 새 와이파이로 다시 시작 */
+    net_join(g_cfg.ssid, g_cfg.pass); /* 다시 시작하지 않고 바로 붙어 봄 */
+    close_pop();
+    wifi_info();
 }
 
 static void on_kb(lv_event_t *e)
@@ -113,7 +121,7 @@ static void open_pop(const char *ssid, bool open)
     lv_obj_set_style_text_font(s_pop_ta, &lv_font_montserrat_24, 0);
     lv_obj_set_size(s_pop_ta, 660, 54);
     lv_obj_set_pos(s_pop_ta, 0, 44);
-    lv_obj_t *b = mk_btn(box, "연결하고 다시 시작", &font_kr_22, on_pop_connect, NULL);
+    lv_obj_t *b = mk_btn(box, "연결", &font_kr_22, on_pop_connect, NULL);
     btn_set_on(b, true);
     lv_obj_set_size(b, 260, 50);
     lv_obj_align(b, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
@@ -129,17 +137,24 @@ static void open_pop(const char *ssid, bool open)
     lv_obj_add_event_cb(s_kb, on_kb, LV_EVENT_ALL, NULL);
 }
 
+/* 찾은 목록을 따로 들고 있다가 번호로 꺼냅니다 (버튼 글자는 길면 잘려 보일 수 있어서) */
+static wifi_scan_t s_aps;
+
 static void on_ap(lv_event_t *e)
 {
-    lv_obj_t *btn = lv_event_get_target(e);
-    const char *ssid = lv_label_get_text(lv_obj_get_child(btn, 0));
-    bool open = (bool)(intptr_t)lv_event_get_user_data(e);
-    open_pop(ssid, open);
+    int i = (int)(intptr_t)lv_event_get_user_data(e);
+    if (i >= 0 && i < s_aps.count) {
+        open_pop(s_aps.ap[i].ssid, s_aps.ap[i].open);
+    }
 }
 
 void set_wifi_list(const void *arg)
 {
     const wifi_scan_t *list = arg;
+    s_aps.count = 0;
+    if (list) {
+        s_aps = *list;
+    }
     lv_obj_clear_state(s_scan_btn, LV_STATE_DISABLED);
     lv_obj_clean(s_wifi_list);
     if (!list || list->count == 0) {
@@ -147,7 +162,7 @@ void set_wifi_list(const void *arg)
         return;
     }
     for (int i = 0; i < list->count; i++) {
-        lv_obj_t *b = mk_btn(s_wifi_list, list->ap[i].ssid, &font_kr_18, on_ap, (void *)(intptr_t)list->ap[i].open);
+        lv_obj_t *b = mk_btn(s_wifi_list, list->ap[i].ssid, &font_kr_18, on_ap, (void *)(intptr_t)i);
         lv_obj_set_size(b, lv_pct(100), 44);
         lv_obj_align(lv_obj_get_child(b, 0), LV_ALIGN_LEFT_MID, 8, 0);
         char sig[24];
@@ -160,12 +175,13 @@ void set_wifi_list(const void *arg)
     }
 }
 
+/* 저장된 와이파이를 전부 지움 (하나만 지우면 예전 와이파이로 다시 붙어 버려서) */
 static void on_forget(lv_event_t *e)
 {
-    net_forget(g_cfg.ssid);
+    net_forget_all();
     g_cfg.ssid[0] = g_cfg.pass[0] = 0;
     config_save();
-    esp_restart();
+    wifi_info();
 }
 
 /* ---------------- 오른쪽 ---------------- */
@@ -300,11 +316,12 @@ void set_build(lv_obj_t *page)
     btn_set_on(s_scan_btn, true);
     lv_obj_align(s_scan_btn, LV_ALIGN_TOP_RIGHT, 0, -6);
     s_wifi_info = mk_wrap(c, &font_kr_18, C_DIM, "");
+    lv_label_set_recolor(s_wifi_info, true);
     lv_obj_set_pos(s_wifi_info, 0, 40);
     lv_obj_set_width(s_wifi_info, LEFT_W - 28);
-    s_wifi_list = mk_list(c, 0, 92, LEFT_W - 28, BODY_H - 28 - 92 - 52);
-    lv_obj_t *b = mk_btn(c, "저장한 와이파이 지우기", &font_kr_18, on_forget, NULL);
-    lv_obj_set_size(b, 230, 40);
+    s_wifi_list = mk_list(c, 0, 112, LEFT_W - 28, BODY_H - 28 - 112 - 52);
+    lv_obj_t *b = mk_btn(c, "저장한 와이파이 모두 지우기", &font_kr_18, on_forget, NULL);
+    lv_obj_set_size(b, 262, 40);
     lv_obj_align(b, LV_ALIGN_BOTTOM_LEFT, 0, 0);
     lv_obj_t *v = mk_label(c, &font_kr_18, C_DIM, "오늘판 " APP_VERSION);
     lv_obj_align(v, LV_ALIGN_BOTTOM_RIGHT, 0, -8);
@@ -365,10 +382,10 @@ void set_build(lv_obj_t *page)
 void set_tick(void)
 {
     static int n;
+    wifi_info(); /* 연결하는 중 → 연결됨 / 실패 를 바로 보이게 매초 */
     if (++n % 5) {
         return;
     }
-    wifi_info();
     if (strcmp(lv_label_get_text(s_status), "새로 받는 중…") || n % 20 == 0) {
         label_set(s_status, g_status_text);
     }

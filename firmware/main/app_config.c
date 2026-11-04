@@ -6,6 +6,8 @@
 
 #include "cJSON.h"
 #include "driver/uart.h"
+#include "driver/usb_serial_jtag.h"
+#include "driver/usb_serial_jtag_vfs.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_spiffs.h"
@@ -271,25 +273,39 @@ static void handle_line(char *line)
     fflush(stdout);
 }
 
+/* 한 글자씩 모아 줄 단위로 명령 처리 */
+typedef struct {
+    char *line;
+    size_t n;
+} line_buf_t;
+
+static void feed(line_buf_t *lb, const uint8_t *buf, int got)
+{
+    for (int i = 0; i < got; i++) {
+        char c = buf[i];
+        if (c == '\n' || c == '\r') {
+            if (lb->n > 0) {
+                lb->line[lb->n] = 0;
+                handle_line(lb->line);
+                lb->n = 0;
+            }
+        } else if (lb->n < LINE_MAX - 1) {
+            lb->line[lb->n++] = c;
+        }
+    }
+}
+
+/* UART 단자(CH343)와 USB 단자(ESP32-S3 내장 USB) 어느 쪽으로 와도 받습니다.
+ * 대답(printf)은 두 쪽 모두로 나갑니다. */
 static void serial_task(void *arg)
 {
-    char *line = malloc(LINE_MAX);
-    size_t n = 0;
+    line_buf_t uart = { malloc(LINE_MAX), 0 }, usb = { malloc(LINE_MAX), 0 };
     uint8_t buf[128];
     for (;;) {
-        int got = uart_read_bytes(UART_NUM_0, buf, sizeof(buf), pdMS_TO_TICKS(100));
-        for (int i = 0; i < got; i++) {
-            char c = buf[i];
-            if (c == '\n' || c == '\r') {
-                if (n > 0) {
-                    line[n] = 0;
-                    handle_line(line);
-                    n = 0;
-                }
-            } else if (n < LINE_MAX - 1) {
-                line[n++] = c;
-            }
-        }
+        int got = uart_read_bytes(UART_NUM_0, buf, sizeof(buf), pdMS_TO_TICKS(20));
+        feed(&uart, buf, got);
+        got = usb_serial_jtag_read_bytes(buf, sizeof(buf), pdMS_TO_TICKS(20));
+        feed(&usb, buf, got);
     }
 }
 
@@ -297,5 +313,10 @@ void config_serial_start(void)
 {
     ESP_ERROR_CHECK(uart_driver_install(UART_NUM_0, 4096, 0, 0, NULL, 0));
     uart_flush_input(UART_NUM_0);
+    usb_serial_jtag_driver_config_t usj = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
+    usj.rx_buffer_size = 4096;
+    if (usb_serial_jtag_driver_install(&usj) == ESP_OK) {
+        usb_serial_jtag_vfs_use_driver();
+    }
     xTaskCreate(serial_task, "serial", 6144, NULL, 3, NULL);
 }

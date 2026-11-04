@@ -8,8 +8,15 @@
  * ssid 는 저장된 와이파이 목록(최대 5개) 맨 앞에 올라가고,
  * 보드는 목록 중 가장 센 와이파이에 붙고 약해지면 더 센 곳으로 옮겨 갑니다. */
 void net_start(const char *ssid, const char *pass);
-/* 저장된 목록에서 지웁니다 */
-void net_forget(const char *ssid);
+/* 목록 맨 앞에 넣고 바로 그 와이파이부터 붙어 봅니다 (다시 시작하지 않음) */
+void net_join(const char *ssid, const char *pass);
+/* 저장된 와이파이를 모두 지우고 연결을 끊습니다 */
+void net_forget_all(void);
+int net_saved_count(void);
+/* 지금 붙어 보는 와이파이 이름 (없으면 "") */
+const char *net_trying(void);
+/* 마지막 실패 ("'이름' 이유", 없으면 "") */
+const char *net_fail_text(void);
 /* 지금 붙어 있는 와이파이 이름 (없으면 "") */
 const char *net_ssid(void);
 bool net_connected(void);
