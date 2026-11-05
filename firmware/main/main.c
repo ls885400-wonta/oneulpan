@@ -36,7 +36,7 @@ bool screen_flipped(void)
     return v != 0;
 }
 
-void screen_flip_toggle(void)
+static void flip_job(void *arg)
 {
     nvs_handle_t h;
     if (nvs_open("board", NVS_READWRITE, &h) == ESP_OK) {
@@ -44,6 +44,11 @@ void screen_flip_toggle(void)
         nvs_commit(h);
         nvs_close(h);
     }
+}
+
+void screen_flip_toggle(void)
+{
+    flash_run(flip_job, NULL);   /* 화면 단추에서 불림: 플래시 작업에서 씀 */
     esp_restart();
 }
 

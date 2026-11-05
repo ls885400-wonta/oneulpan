@@ -1,5 +1,7 @@
 #include "net.h"
 
+#include "app_config.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -59,7 +61,15 @@ static void saved_load(void)
     }
 }
 
+static void saved_store_job(void *arg);
+
+/* 화면 작업에서도 불리므로 플래시 작업에 맡김 */
 static void saved_store(void)
+{
+    flash_run(saved_store_job, NULL);
+}
+
+static void saved_store_job(void *arg)
 {
     nvs_handle_t h;
     if (nvs_open("board", NVS_READWRITE, &h) == ESP_OK) {

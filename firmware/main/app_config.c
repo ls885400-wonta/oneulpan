@@ -8,11 +8,15 @@
 #include "driver/uart.h"
 #include "driver/usb_serial_jtag.h"
 #include "driver/usb_serial_jtag_vfs.h"
+#include "esp_cpu.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_memory_utils.h"
 #include "esp_spiffs.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "net.h"
 #include "nvs.h"
@@ -68,8 +72,11 @@ static char *to_json(bool include_secrets)
     return out;
 }
 
+static void flash_start(void);
+
 void config_load(void)
 {
+    flash_start();
     memset(&g_cfg, 0, sizeof(g_cfg));
     strlcpy(g_cfg.title, "오늘판", sizeof(g_cfg.title));
     strlcpy(g_cfg.home_ret, "20", sizeof(g_cfg.home_ret));
@@ -95,8 +102,51 @@ void config_load(void)
     nvs_close(h);
 }
 
-bool config_save(void)
+/* ---- 플래시에 쓰기는 '플래시 작업' 에서 ----
+ *  화면(LVGL) 작업은 스택이 PSRAM 에 있어서, 플래시를 지우는 동안 캐시가 멈추면
+ *  assert(s_task_stack_is_sane_when_cache_frozen) 로 죽습니다. 그래서 스택이 PSRAM 인
+ *  작업이 부르면 내부 RAM 스택을 가진 작업에 맡기고 끝날 때까지 기다립니다. */
+
+typedef struct {
+    void (*fn)(void *);
+    void *arg;
+    SemaphoreHandle_t done;
+} flash_job_t;
+
+static QueueHandle_t s_flash_q;
+
+static void flash_task(void *unused)
 {
+    flash_job_t j;
+    for (;;) {
+        if (xQueueReceive(s_flash_q, &j, portMAX_DELAY)) {
+            j.fn(j.arg);
+            xSemaphoreGive(j.done);
+        }
+    }
+}
+
+void flash_run(void (*fn)(void *), void *arg)
+{
+    if (!s_flash_q || !esp_ptr_external_ram((const void *)esp_cpu_get_sp())) {
+        fn(arg);   /* 내부 RAM 스택이면 바로 */
+        return;
+    }
+    flash_job_t j = { fn, arg, xSemaphoreCreateBinary() };
+    xQueueSend(s_flash_q, &j, portMAX_DELAY);
+    xSemaphoreTake(j.done, portMAX_DELAY);
+    vSemaphoreDelete(j.done);
+}
+
+static void flash_start(void)
+{
+    s_flash_q = xQueueCreate(4, sizeof(flash_job_t));
+    xTaskCreate(flash_task, "flash", 6144, NULL, 5, NULL);
+}
+
+static void save_job(void *arg)
+{
+    bool *ok = arg;
     char *all = to_json(true);
     nvs_handle_t h;
     esp_err_t err = nvs_open("board", NVS_READWRITE, &h);
@@ -108,7 +158,14 @@ bool config_save(void)
         nvs_close(h);
     }
     cJSON_free(all);
-    return err == ESP_OK;
+    *ok = err == ESP_OK;
+}
+
+bool config_save(void)
+{
+    bool ok = false;
+    flash_run(save_job, &ok);
+    return ok;
 }
 
 bool config_apply_json(const char *json)
@@ -173,7 +230,28 @@ char *storage_read(const char *name, size_t *len)
     return buf;
 }
 
+typedef struct {
+    const char *name, *data;
+    size_t len;
+    bool ok;
+} write_job_t;
+
+static bool storage_write_now(const char *name, const char *data, size_t len);
+
+static void write_job(void *arg)
+{
+    write_job_t *w = arg;
+    w->ok = storage_write_now(w->name, w->data, w->len);
+}
+
 bool storage_write(const char *name, const char *data, size_t len)
+{
+    write_job_t w = { name, data, len, false };
+    flash_run(write_job, &w);
+    return w.ok;
+}
+
+static bool storage_write_now(const char *name, const char *data, size_t len)
 {
     char path[48], tmp[52];
     snprintf(path, sizeof(path), "/data/%s.json", name);
