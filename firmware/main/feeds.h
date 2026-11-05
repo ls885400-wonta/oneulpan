@@ -143,14 +143,16 @@ int teachers_find(const char *name);
 
 /* 시간표 바꾸기 (수업 교체 · 보강). 날짜마다 칸을 덮어써서 /data/ttchg.json 에 둡니다.
  *  ti 는 g_data.teachers 안의 번호, p 는 0부터 교시. */
-enum { TT_NORMAL, TT_MOVED_OUT, TT_MOVED_IN, TT_EXTRA };
+enum { TT_NORMAL, TT_MOVED_OUT, TT_MOVED_IN, TT_EXTRA, TT_CLEARED };
 /* 그날 그 교시 수업 (바뀐 것 반영). 수업이 있으면 true.
- * TT_MOVED_OUT(옮겨 가서 빈 칸)이면 false 이고 subj·room 은 원래 수업. */
+ * TT_MOVED_OUT(옮겨 가서 빈 칸)·TT_CLEARED(비운 칸)이면 false 이고 subj·room 은 원래 수업. */
 bool tt_lesson(int ti, int ymd, int p, const char **subj, const char **room, int *kind);
 /* from 칸 수업을 to 칸으로 (to 에 수업이 있으면 서로 맞바꿈) */
 void tt_move(int ti, int from_ymd, int from_p, int to_ymd, int to_p);
 /* 빈 칸에 보강 넣기 */
 void tt_add_extra(int ti, int ymd, int p, const char *subj, const char *room);
+/* 그 칸을 비움 (보강은 지우고, 수업·옮김 표시는 빈 칸으로) */
+void tt_clear(int ti, int ymd, int p);
 /* 그 칸을 원래 시간표대로 */
 void tt_restore(int ti, int ymd, int p);
 /* monday 부터 5일 동안 바뀐 칸 수 / 모두 원래대로 */

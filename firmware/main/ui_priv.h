@@ -24,6 +24,13 @@
 #define C_SKY    0x7DD3FC
 #define C_BTN    0x2C3B5B   /* 고르지 않은 단추 */
 #define C_BTN_LINE 0x4A5D84
+/* 시간표 바뀐 칸: 보강 = 연한 노랑, 교체 = 연한 파랑 (글자는 짙게) */
+#define TT_EXTRA_BG   0xFFF1A8
+#define TT_EXTRA_FG   0x4A3500
+#define TT_EXTRA_LINE 0xE0B020
+#define TT_MOVED_BG   0xCFE5FF
+#define TT_MOVED_FG   0x0B3270
+#define TT_MOVED_LINE 0x5A9BE8
 
 #define SCR_W 1024
 #define SCR_H 600

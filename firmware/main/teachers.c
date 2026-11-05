@@ -109,7 +109,7 @@ int teachers_find(const char *name)
 
 /* ---------------- 시간표 바꾸기 (교체 · 보강) ----------------
  *  {"c":[{"n":"이상민","d":20261105,"p":2,"k":2,"s":"국어","r":"301"}, …]}
- *  k: 1 = 옮겨 가서 빈 칸, 2 = 옮겨 온 수업, 3 = 보강 */
+ *  k: 1 = 옮겨 가서 빈 칸, 2 = 옮겨 온 수업, 3 = 보강, 4 = 비운 칸 */
 
 #define CHG_MAX 64
 #define CHG_KEEP_DAYS 14   /* 이보다 오래된 것은 저장할 때 버림 */
@@ -155,7 +155,7 @@ static void chg_load(void)
         c->ymd = cJSON_GetNumberValue(cJSON_GetObjectItem(item, "d"));
         c->p = cJSON_GetNumberValue(cJSON_GetObjectItem(item, "p"));
         c->kind = cJSON_GetNumberValue(cJSON_GetObjectItem(item, "k"));
-        if (!n || c->p < 0 || c->p >= TT_PERIODS || c->kind < TT_MOVED_OUT || c->kind > TT_EXTRA) {
+        if (!n || c->p < 0 || c->p >= TT_PERIODS || c->kind < TT_MOVED_OUT || c->kind > TT_CLEARED) {
             continue;
         }
         strlcpy(c->name, n, sizeof(c->name));
@@ -284,7 +284,7 @@ bool tt_lesson(int ti, int ymd, int p, const char **subj, const char **room, int
     const tt_change_t *c = chg_find(t->name, ymd, p);
     if (c) {
         k = c->kind;
-        if (k == TT_MOVED_OUT) {
+        if (k == TT_MOVED_OUT || k == TT_CLEARED) {
             has = false;
         } else {
             s = c->subj;
@@ -362,6 +362,35 @@ void tt_add_extra(int ti, int ymd, int p, const char *subj, const char *room)
     undo_push();
     set_cell(t, ymd, p, true, subj, room, TT_EXTRA);
     ESP_LOGI(TAG, "%s: %d %d교시 보강 %s %s", t->name, ymd, p + 1, subj, room);
+    chg_save();
+}
+
+void tt_clear(int ti, int ymd, int p)
+{
+    const teacher_t *t = chg_teacher(ti);
+    if (!t) {
+        return;
+    }
+    const char *bs, *br;
+    int kind;
+    bool has = tt_lesson(ti, ymd, p, NULL, NULL, &kind);
+    if (!has && (kind == TT_NORMAL || kind == TT_CLEARED)) {
+        return;   /* 이미 빈 칸 */
+    }
+    undo_push();
+    chg_remove(t->name, ymd, p);
+    if (base_lesson(t, ymd, p, &bs, &br)) {
+        /* 원래 수업이 있던 칸은 '비운 칸' 으로 덮어씀 */
+        tt_change_t *c = &s_chg[s_chg_n < CHG_MAX ? s_chg_n++ : CHG_MAX - 1];
+        memset(c, 0, sizeof(*c));
+        strlcpy(c->name, t->name, sizeof(c->name));
+        c->ymd = ymd;
+        c->p = p;
+        c->kind = TT_CLEARED;
+        strlcpy(c->subj, bs, sizeof(c->subj));
+        strlcpy(c->room, br, sizeof(c->room));
+    }
+    ESP_LOGI(TAG, "%s: %d %d교시 비움", t->name, ymd, p + 1);
     chg_save();
 }
 

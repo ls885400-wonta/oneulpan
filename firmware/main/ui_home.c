@@ -576,10 +576,17 @@ static void refresh_tt(void)
         snprintf(name, sizeof(name), "%s%s", kind == TT_EXTRA ? "보강 " : kind == TT_MOVED_IN ? "교체 " : "",
                  has ? subj : "공강");
         tt_row(row++, badge, now ? C_RED : has ? C_ACCENT : 0x3A4F7E, name, has ? rm : "", now);
-        /* 바뀐 수업은 테두리 색으로: 보강 초록, 교체 주황 */
-        uint32_t bc = kind == TT_EXTRA ? C_GREEN : kind == TT_MOVED_IN ? C_WARM : 0x3E8F77;
-        lv_obj_set_style_border_width(s_tt_row[row - 1], has && !now ? 2 : 0, 0);
-        lv_obj_set_style_border_color(s_tt_row[row - 1], lv_color_hex(bc), 0);
+        /* 바뀐 수업: 보강 = 연한 노랑, 교체 = 연한 파랑 바탕에 짙은 글자 */
+        bool extra = has && kind == TT_EXTRA, moved = has && kind == TT_MOVED_IN;
+        uint32_t bc = extra ? TT_EXTRA_LINE : moved ? TT_MOVED_LINE : 0x3E8F77;
+        if (extra || moved) {
+            uint32_t fg = extra ? TT_EXTRA_FG : TT_MOVED_FG;
+            lv_obj_set_style_bg_color(s_tt_row[row - 1], lv_color_hex(extra ? TT_EXTRA_BG : TT_MOVED_BG), 0);
+            lv_obj_set_style_text_color(s_tt_subj[row - 1], lv_color_hex(fg), 0);
+            lv_obj_set_style_text_color(s_tt_room[row - 1], lv_color_hex(fg), 0);
+        }
+        lv_obj_set_style_border_width(s_tt_row[row - 1], has && (!now || extra || moved) ? 2 : 0, 0);
+        lv_obj_set_style_border_color(s_tt_row[row - 1], lv_color_hex(now ? C_RED : bc), 0);
         lv_obj_set_style_opa(s_tt_row[row - 1], is_today && m >= st + LESSON_MIN ? LV_OPA_60 : LV_OPA_COVER, 0);
     }
     for (; row < TT_ROWS; row++) {

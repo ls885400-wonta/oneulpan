@@ -127,6 +127,14 @@ void tt_grid_fill(tt_grid_t *g, int teacher)
             int kind;
             bool has = t && tt_lesson(teacher, ymd, p, &subj, &room, &kind);
             uint32_t tc = holiday ? C_RED : C_TEXT;
+            uint32_t bg = has ? C_CARD2 : C_CARD;
+            if (has && kind == TT_EXTRA) {
+                bg = TT_EXTRA_BG;   /* 보강: 연한 노랑 바탕에 짙은 갈색 글자 */
+                tc = TT_EXTRA_FG;
+            } else if (has && kind == TT_MOVED_IN) {
+                bg = TT_MOVED_BG;   /* 교체: 연한 파랑 바탕에 짙은 남색 글자 */
+                tc = TT_MOVED_FG;
+            }
             if (has) {
                 snprintf(buf, sizeof(buf), "%s%s\n%s", kind == TT_EXTRA ? "보강 " : "", subj, room);
             } else if (t && kind == TT_MOVED_OUT) {
@@ -141,13 +149,14 @@ void tt_grid_fill(tt_grid_t *g, int teacher)
             lv_obj_set_style_text_color(g->text[d][p], lv_color_hex(tc), 0);
 
             bool now = is_today && p == cur;
-            /* 바뀐 칸 테두리: 보강 = 초록, 교체·옮겨 간 빈 칸 = 주황 */
-            uint32_t bc = now ? C_GREEN : kind == TT_EXTRA ? C_GREEN : kind != TT_NORMAL ? C_WARM
-                        : is_today && has ? 0x3E8F77 : C_LINE;
+            bool changed = has && (kind == TT_EXTRA || kind == TT_MOVED_IN);
+            /* 테두리: 지금 = 초록, 보강·교체 = 바탕보다 진한 색, 옮겨 간 빈 칸 = 주황 */
+            uint32_t bc = now ? C_GREEN : kind == TT_EXTRA ? TT_EXTRA_LINE : kind == TT_MOVED_IN ? TT_MOVED_LINE
+                        : kind == TT_MOVED_OUT ? C_WARM : is_today && has ? 0x3E8F77 : C_LINE;
             lv_obj_set_style_bg_opa(c, msg ? LV_OPA_TRANSP : has ? LV_OPA_COVER : LV_OPA_30, 0);
-            lv_obj_set_style_bg_color(c, lv_color_hex(now ? 0x24624E : has ? C_CARD2 : C_CARD), 0);
+            lv_obj_set_style_bg_color(c, lv_color_hex(now && !changed ? 0x24624E : bg), 0);
             lv_obj_set_style_border_color(c, lv_color_hex(bc), 0);
-            lv_obj_set_style_border_width(c, now ? 3 : kind != TT_NORMAL ? 2 : 1, 0);
+            lv_obj_set_style_border_width(c, now ? 3 : changed || kind == TT_MOVED_OUT ? 2 : 1, 0);
             lv_obj_set_style_opa(c, holiday && !now ? LV_OPA_60 : LV_OPA_COVER, 0);
         }
     }
@@ -172,6 +181,7 @@ static lv_obj_t *s_pop, *s_pop_ta, *s_pop_subj_ta, *s_pop_subj_btns;
 static int s_pop_ymd, s_pop_p;
 
 static void show_now(void);
+static void open_extra(int ymd, int p);
 
 static void show_or_hide(lv_obj_t *o, bool show)
 {
@@ -480,17 +490,24 @@ static void open_extra(int ymd, int p)
     lv_obj_set_style_border_color(s_pop_subj_ta, lv_color_hex(C_ACCENT), 0);
 }
 
+static void on_pop_extra(lv_event_t *e)
+{
+    open_extra(s_pop_ymd, s_pop_p);
+}
+
 /* 바뀐 칸: 원래대로 (옮겨 간 빈 칸이면 보강도 넣을 수 있게) */
 static void open_restore(int ymd, int p, int kind)
 {
     char title[64], body[96];
-    pop_title(ymd, p, kind == TT_EXTRA ? "보강" : "바뀐 수업", title, sizeof(title));
+    pop_title(ymd, p, kind == TT_EXTRA ? "보강" : kind == TT_CLEARED ? "비운 칸" : "바뀐 수업", title, sizeof(title));
     lv_obj_t *box = pop_box(170, title);
     s_pop_ymd = ymd;
     s_pop_p = p;
     const char *subj, *room;
     tt_lesson(s_sel, ymd, p, &subj, &room, NULL);
-    snprintf(body, sizeof(body), kind == TT_MOVED_OUT ? "%s 수업이 다른 시간으로 옮겨 갔습니다." : "%s %s", subj, room);
+    snprintf(body, sizeof(body),
+             kind == TT_MOVED_OUT ? "%s 수업이 다른 시간으로 옮겨 갔습니다."
+             : kind == TT_CLEARED ? "%s 수업을 비웠습니다." : "%s %s", subj, room);
     lv_obj_t *l = mk_label(box, &font_kr_22, C_DIM, body);
     lv_obj_set_pos(l, 0, 44);
 
@@ -501,6 +518,47 @@ static void open_restore(int ymd, int p, int kind)
     b = mk_btn(box, "취소", &font_kr_22, on_pop_cancel, NULL);
     lv_obj_set_size(b, 120, 48);
     lv_obj_align(b, LV_ALIGN_BOTTOM_RIGHT, -192, 0);
+    if (kind == TT_MOVED_OUT || kind == TT_CLEARED) {
+        b = mk_btn(box, "보강 넣기", &font_kr_22, on_pop_extra, NULL);
+        lv_obj_set_size(b, 160, 48);
+        lv_obj_align(b, LV_ALIGN_BOTTOM_RIGHT, -324, 0);
+    }
+}
+
+/* 두 번 눌러 칸 비우기: 한 번 누른 것은 잠깐 기다렸다가 처리 */
+#define DOUBLE_MS 350
+static lv_timer_t *s_tap_timer;
+static int s_tap_cell = -1;
+
+static void on_tap(int d, int p);
+
+static void on_tap_timer(lv_timer_t *t)
+{
+    int v = s_tap_cell;
+    s_tap_timer = NULL;
+    s_tap_cell = -1;
+    if (v >= 0) {
+        on_tap(v / 10, v % 10);
+    }
+}
+
+static void on_click(int d, int p)
+{
+    int v = d * 10 + p;
+    if (s_tap_timer && s_tap_cell == v) {
+        lv_timer_del(s_tap_timer);
+        s_tap_timer = NULL;
+        s_tap_cell = -1;
+        tt_clear(s_sel, week_day(d), p);
+        after_change();
+        return;
+    }
+    if (s_tap_timer) {
+        lv_timer_del(s_tap_timer);   /* 다른 칸을 눌렀으면 앞 것은 버림 */
+    }
+    s_tap_cell = v;
+    s_tap_timer = lv_timer_create(on_tap_timer, DOUBLE_MS, NULL);
+    lv_timer_set_repeat_count(s_tap_timer, 1);
 }
 
 static void on_tap(int d, int p)
@@ -575,7 +633,7 @@ static void on_grid_cell(lv_event_t *e)
     } else if (code == LV_EVENT_PRESS_LOST) {
         drag_end();
     } else if (code == LV_EVENT_CLICKED && !s_dragged && ok) {
-        on_tap(d, p);
+        on_click(d, p);
     }
 }
 
