@@ -158,7 +158,9 @@ static void on_cell(lv_event_t *e)
 static void grid_build(week_grid_t *g, lv_obj_t *box, int w, int h, int first, int weeks, int days, int month,
                        int kind, int sel)
 {
-    static const char *HEAD[7] = { "월", "화", "수", "목", "금", "토", "일" };
+    /* 7칸이면 일요일부터, 5칸(창체)이면 월~금 */
+    static const char *HEAD[7] = { "일", "월", "화", "수", "목", "금", "토" };
+    const int wd0 = days == 7 ? 0 : 1;
     const int hh = 28, gap = 5;
     memset(g, 0, sizeof(*g));
     g->first = first;
@@ -171,7 +173,8 @@ static void grid_build(week_grid_t *g, lv_obj_t *box, int w, int h, int first, i
     g->lines = (ch - 28) / GRID_LINE_H;
     int today = ymd_today();
     for (int d = 0; d < days; d++) {
-        lv_obj_t *l = mk_label(box, &font_kr_18, d == 6 ? C_PINK : d == 5 ? C_BLUE : C_DIM, HEAD[d]);
+        int wd = wd0 + d;
+        lv_obj_t *l = mk_label(box, &font_kr_18, wd == 0 ? C_PINK : wd == 6 ? C_BLUE : C_DIM, HEAD[wd]);
         lv_obj_set_width(l, g->cw);
         lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_pos(l, d * (g->cw + gap), 2);
@@ -202,7 +205,8 @@ static void grid_build(week_grid_t *g, lv_obj_t *box, int w, int h, int first, i
             } else {
                 snprintf(buf, sizeof(buf), "%d", day);
             }
-            uint32_t color = (d == 6 || holiday) ? C_PINK : d == 5 ? C_BLUE : C_TEXT;
+            int wd = wd0 + d;
+            uint32_t color = (wd == 0 || holiday) ? C_PINK : wd == 6 ? C_BLUE : C_TEXT;
             lv_obj_t *dl = mk_label(c, &font_kr_18, color, buf);
             lv_obj_set_pos(dl, 6, 2);
             if (ymd == today) {
@@ -381,7 +385,7 @@ void school_refresh(void)
     while (ndays < 31 && ymd_add(first, ndays) / 100 == s_month) {
         ndays++;
     }
-    int off = (ymd_wday(first) + 6) % 7;   /* 월요일부터 */
+    int off = ymd_wday(first);   /* 일요일부터 */
     int weeks = (off + ndays + 6) / 7;
     week_grid_t *g = &s_school_grid;
     grid_build(g, s_school_box, SB_W, SB_H,
@@ -507,7 +511,8 @@ void cal_build(lv_obj_t *page)
 void cal_refresh(void)
 {
     lv_obj_clean(s_cal);
-    int first = ymd_week_monday(), last = ymd_add(first, CAL_WEEKS * 7 - 1);
+    int today = ymd_today();
+    int first = ymd_add(today, -ymd_wday(today)), last = ymd_add(first, CAL_WEEKS * 7 - 1); /* 이번 주 일요일부터 */
     char buf[80];
     snprintf(buf, sizeof(buf), "내 구글 캘린더  %d/%d ~ %d/%d", first / 100 % 100, first % 100, last / 100 % 100,
              last % 100);
