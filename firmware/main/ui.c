@@ -24,7 +24,7 @@ char g_status_text[64] = "";
 static time_t s_updated;
 static bool s_connected, s_configured;
 
-static const char *TAB_NAMES[PG_COUNT] = { "홈", "학교일정", "창체계획", "찾기", "캘린더", "급식", "설정" };
+static const char *TAB_NAMES[PG_COUNT] = { "홈", "학교일정", "창체계획", "시간표 찾기", "캘린더", "급식", "설정" };
 
 /* ---------------- 만들기 도우미 ---------------- */
 
@@ -411,7 +411,7 @@ static void bar_build(lv_obj_t *scr)
     lv_obj_set_size(s_name, 168, 26);   /* 한 줄 */
 
     /* 메뉴: 칸마다 글자 너비 + 좌우 여백이 같게 */
-    const int tab_pad = 24, tab_gap = 2;
+    const int tab_pad = 16, tab_gap = 2;
     int tab_w[PG_COUNT], tw = 8 - tab_gap;
     for (int i = 0; i < PG_COUNT; i++) {
         lv_point_t sz;
@@ -542,6 +542,22 @@ static void screen_power(void)
 #define BATT_HIST 30      /* 10초 × 30 = 5분 전과 비교 */
 #define BATT_TREND 0.03f  /* 5분 사이 이만큼 오르면 충전 중, 내려가면 아님 */
 
+/* 지난 1시간 전압 기록 (10초마다, mV, 맨 윗비트 = 충전 중으로 봤음). 시리얼 "BATT" 로 받아 봄 */
+#define BLOG_MAX 360
+static uint16_t s_blog[BLOG_MAX];
+static int s_blog_n;
+
+void batt_dump(void)
+{
+    int n = s_blog_n < BLOG_MAX ? s_blog_n : BLOG_MAX;
+    printf("\nBATT %d", n);
+    for (int i = s_blog_n - n; i < s_blog_n; i++) {
+        uint16_t x = s_blog[i % BLOG_MAX];
+        printf("%s%d%s", (i - (s_blog_n - n)) % 20 ? " " : "\n", x & 0x7FFF, x & 0x8000 ? "+" : "");
+    }
+    printf("\nBATT END\n");
+}
+
 static float batt_volts(void)
 {
     uint32_t sum = 0;
@@ -584,6 +600,7 @@ static void battery(void)
         }
     }
     hist[hn++ % BATT_HIST] = v;
+    s_blog[s_blog_n++ % BLOG_MAX] = (uint16_t)(v * 1000.0f) | (charging ? 0x8000 : 0);
     bool usb = usb_serial_jtag_is_connected();
     if (charging != was) {
         ESP_LOGI("ui", "배터리 %.2fV → %s", v, charging ? "충전 중" : "충전 끝");

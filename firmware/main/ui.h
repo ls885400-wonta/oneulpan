@@ -30,3 +30,5 @@ typedef struct {
     } ap[WIFI_SCAN_MAX];
 } wifi_scan_t;
 void ui_wifi_scanned(const wifi_scan_t *list);
+/* 지난 1시간 배터리 전압 기록을 시리얼로 */
+void batt_dump(void);

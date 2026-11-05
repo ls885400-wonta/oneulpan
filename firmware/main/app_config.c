@@ -16,6 +16,7 @@
 #include "freertos/task.h"
 #include "net.h"
 #include "nvs.h"
+#include "ui.h"
 
 static const char *TAG = "config";
 
@@ -265,6 +266,8 @@ static void handle_line(char *line)
         } else {
             printf("\nCFG ERR\n");
         }
+    } else if (strstr(line, "BATT")) {
+        batt_dump();
     } else if (!strcmp(line, "INFO")) {
         char *pub = config_public_json();
         printf("\nINFO {\"ver\":\"%s\",\"ip\":\"%s\",\"cfg\":%s}\n", APP_VERSION, net_ip(), pub);

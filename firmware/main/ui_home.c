@@ -458,13 +458,12 @@ static void refresh_next(const teachers_t *ts, int ti)
         label_set(s_next_text, "오늘은 수업이 없습니다");
         return;
     }
-    const teacher_t *t = &ts->t[ti];
-    int d = ymd_wday(today) - 1;
     int m = now_minute();
     int cur = -1, nxt = -1;
+    const char *subj, *rm;
     for (int p = 0; p < TT_PERIODS; p++) {
         int st = ts->ptime[p];
-        if (!t->subj[d][p][0]) {
+        if (!tt_lesson(ti, today, p, NULL, NULL, NULL)) {   /* 교체·보강 반영 */
             continue;
         }
         if (m >= st && m < st + LESSON_MIN) {
@@ -474,8 +473,9 @@ static void refresh_next(const teachers_t *ts, int ti)
         }
     }
     if (cur >= 0) {
+        tt_lesson(ti, today, cur, &subj, &rm, NULL);
         snprintf(buf, sizeof(buf), "지금 %d교시 %s 수업 중 · #D81E32 %d분 남음#",
-                 cur + 1, t->subj[d][cur], ts->ptime[cur] + LESSON_MIN - m);
+                 cur + 1, subj, ts->ptime[cur] + LESSON_MIN - m);
     } else if (nxt >= 0) {
         int left = ts->ptime[nxt] - m;
         char when[32], room[48] = "";
@@ -484,13 +484,14 @@ static void refresh_next(const teachers_t *ts, int ti)
         } else {
             snprintf(when, sizeof(when), "%d분 뒤", left);
         }
-        if (t->room[d][nxt][0]) {
-            snprintf(room, sizeof(room), " (%s)", t->room[d][nxt]);
+        tt_lesson(ti, today, nxt, &subj, &rm, NULL);
+        if (rm[0]) {
+            snprintf(room, sizeof(room), " (%s)", rm);
         }
         /* 남은 시간은 빨강 */
         bool clean = m >= CLEAN_START && m < CLEAN_END;
         snprintf(buf, sizeof(buf), "%s다음 수업 %d교시 %s%s · #D81E32 %s#", clean ? "청소 시간 · " : "",
-                 nxt + 1, t->subj[d][nxt], room, when);
+                 nxt + 1, subj, room, when);
     } else {
         strlcpy(buf, "오늘 수업이 모두 끝났습니다", sizeof(buf));
     }
@@ -513,7 +514,7 @@ static void refresh_tt(void)
     label_set(s_tt_title, buf);
 
     const char *msg = !ts ? "설치 페이지에서 교사 시간표 한글 파일을 넣어 주세요."
-                    : ti < 0 ? "찾기 화면에서 선생님을 고른 뒤 '이 보드 주인으로'를 누르세요." : NULL;
+                    : ti < 0 ? "시간표 찾기에서 선생님을 고른 뒤 '이 보드 주인으로'를 누르세요." : NULL;
     label_set(s_tt_msg, msg ? msg : "");
     show_or_hide(s_tt_msg, msg != NULL);
     if (msg) {
@@ -537,8 +538,6 @@ static void refresh_tt(void)
         snprintf(buf, sizeof(buf), "다음 수업일 · %d/%d(%s)", day / 100 % 100, day % 100, WEEKDAYS[wd]);
         label_set(s_tt_sub, buf);
     }
-    const teacher_t *t = &ts->t[ti];
-    int d = wd - 1;
     int m = now_minute();
     int row = 0;
     for (int p = 0; p < TT_PERIODS && row < TT_ROWS; p++) {
@@ -563,7 +562,9 @@ static void refresh_tt(void)
         if (row >= TT_ROWS) {
             break;
         }
-        bool has = t->subj[d][p][0] != 0;
+        const char *subj, *rm;
+        int kind;
+        bool has = tt_lesson(ti, day, p, &subj, &rm, &kind);   /* 교체·보강 반영 */
         bool now = is_today && m >= st && m < st + LESSON_MIN;
         char badge[32];
         if (now) {
@@ -571,10 +572,14 @@ static void refresh_tt(void)
         } else {
             snprintf(badge, sizeof(badge), "%d교시\n%02d:%02d", p + 1, st / 60, st % 60);
         }
-        tt_row(row++, badge, now ? C_RED : has ? C_ACCENT : 0x3A4F7E, has ? t->subj[d][p] : "공강",
-               has ? t->room[d][p] : "", now);
+        char name[40];
+        snprintf(name, sizeof(name), "%s%s", kind == TT_EXTRA ? "보강 " : kind == TT_MOVED_IN ? "교체 " : "",
+                 has ? subj : "공강");
+        tt_row(row++, badge, now ? C_RED : has ? C_ACCENT : 0x3A4F7E, name, has ? rm : "", now);
+        /* 바뀐 수업은 테두리 색으로: 보강 초록, 교체 주황 */
+        uint32_t bc = kind == TT_EXTRA ? C_GREEN : kind == TT_MOVED_IN ? C_WARM : 0x3E8F77;
         lv_obj_set_style_border_width(s_tt_row[row - 1], has && !now ? 2 : 0, 0);
-        lv_obj_set_style_border_color(s_tt_row[row - 1], lv_color_hex(0x3E8F77), 0);
+        lv_obj_set_style_border_color(s_tt_row[row - 1], lv_color_hex(bc), 0);
         lv_obj_set_style_opa(s_tt_row[row - 1], is_today && m >= st + LESSON_MIN ? LV_OPA_60 : LV_OPA_COVER, 0);
     }
     for (; row < TT_ROWS; row++) {
