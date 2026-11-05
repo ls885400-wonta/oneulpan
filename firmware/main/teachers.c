@@ -125,6 +125,15 @@ typedef struct {
 static tt_change_t s_chg[CHG_MAX];
 static int s_chg_n = -1;   /* -1 = 아직 안 읽음 */
 
+/* 실행 취소: 바꾸기 직전 목록을 10번까지 (PSRAM) */
+#define UNDO_MAX 10
+typedef struct {
+    int n;
+    tt_change_t c[CHG_MAX];
+} chg_snap_t;
+static chg_snap_t *s_undo;
+static int s_undo_n;
+
 static void chg_load(void)
 {
     if (s_chg_n >= 0) {
@@ -183,6 +192,42 @@ static void chg_save(void)
         storage_write("ttchg", out, strlen(out));
         cJSON_free(out);
     }
+}
+
+static void undo_push(void)
+{
+    chg_load();
+    if (!s_undo) {
+        s_undo = heap_caps_calloc(UNDO_MAX, sizeof(chg_snap_t), MALLOC_CAP_SPIRAM);
+        if (!s_undo) {
+            return;
+        }
+    }
+    if (s_undo_n == UNDO_MAX) {
+        memmove(&s_undo[0], &s_undo[1], (UNDO_MAX - 1) * sizeof(chg_snap_t));
+        s_undo_n--;
+    }
+    s_undo[s_undo_n].n = s_chg_n;
+    memcpy(s_undo[s_undo_n].c, s_chg, s_chg_n * sizeof(tt_change_t));
+    s_undo_n++;
+}
+
+int tt_undo_count(void)
+{
+    return s_undo_n;
+}
+
+bool tt_undo(void)
+{
+    if (!s_undo_n) {
+        return false;
+    }
+    s_undo_n--;
+    s_chg_n = s_undo[s_undo_n].n;
+    memcpy(s_chg, s_undo[s_undo_n].c, s_chg_n * sizeof(tt_change_t));
+    ESP_LOGI(TAG, "실행 취소 (남은 %d번)", s_undo_n);
+    chg_save();
+    return true;
 }
 
 static const teacher_t *chg_teacher(int ti)
@@ -300,6 +345,7 @@ void tt_move(int ti, int from_ymd, int from_p, int to_ymd, int to_p)
     bool b = tt_lesson(ti, to_ymd, to_p, &s, &r, &kb);
     strlcpy(bs, s, sizeof(bs));
     strlcpy(br, r, sizeof(br));
+    undo_push();
     /* 보강은 옮겨도 보강, 나머지는 '옮겨 온 수업' */
     set_cell(t, to_ymd, to_p, true, as, ar, ka == TT_EXTRA ? TT_EXTRA : TT_MOVED_IN);
     set_cell(t, from_ymd, from_p, b, bs, br, kb == TT_EXTRA ? TT_EXTRA : TT_MOVED_IN);
@@ -313,6 +359,7 @@ void tt_add_extra(int ti, int ymd, int p, const char *subj, const char *room)
     if (!t) {
         return;
     }
+    undo_push();
     set_cell(t, ymd, p, true, subj, room, TT_EXTRA);
     ESP_LOGI(TAG, "%s: %d %d교시 보강 %s %s", t->name, ymd, p + 1, subj, room);
     chg_save();
@@ -322,6 +369,7 @@ void tt_restore(int ti, int ymd, int p)
 {
     const teacher_t *t = chg_teacher(ti);
     if (t && chg_find(t->name, ymd, p)) {
+        undo_push();
         chg_remove(t->name, ymd, p);
         chg_save();
     }
@@ -343,6 +391,9 @@ void tt_restore_week(int ti, int monday)
 {
     const teacher_t *t = chg_teacher(ti);
     chg_load();
+    if (t && tt_week_changes(ti, monday)) {
+        undo_push();
+    }
     for (int i = 0; t && i < s_chg_n;) {
         int k = ymd_diff(s_chg[i].ymd, monday);
         if (k >= 0 && k < TT_DAYS && !strcmp(s_chg[i].name, t->name)) {

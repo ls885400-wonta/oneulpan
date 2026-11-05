@@ -18,7 +18,9 @@ HANGUL = "".join(
     for b2 in range(0xA1, 0xFF)
 )
 EXTRA = "·°℃~※→←↑↓…★☆○●◆■□△▲▽▼「」『』《》〈〉【】①②③④⑤⑥⑦⑧⑨"
-FULL = ASCII + HANGUL + EXTRA
+# 낱자(ㄱ~ㅎ, ㅏ~ㅣ): 보드의 한글 자판과 쓰는 중인 글자
+JAMO = "".join(chr(c) for c in range(0x3131, 0x3164))
+FULL = ASCII + JAMO + HANGUL + EXTRA
 DATE = "0123456789 ,.:-/()년월일요화수목금토오전후늘내"
 
 # (C 이름, TTF, 크기 px, 글자 모음, 기호용 대체 글꼴)

@@ -10,6 +10,7 @@
  */
 #include <stdlib.h>
 
+#include "hkb.h"
 #include "ui_priv.h"
 
 #define LESSON_MIN 50
@@ -161,17 +162,25 @@ static int s_last_min = -1;
 
 /* ---------------- 시간표 바꾸기: 끌어서 교체 · 눌러서 보강 ---------------- */
 
-static lv_obj_t *s_chg_hint, *s_undo_btn;
+static lv_obj_t *s_chg_hint, *s_week_btn, *s_undo_btn;
 static lv_obj_t *s_ghost;              /* 끄는 동안 손가락을 따라다니는 칸 */
 static lv_obj_t *s_hover;              /* 놓을 칸 */
 static int s_drag_d = -1, s_drag_p;
 static bool s_dragging, s_dragged;
 static lv_point_t s_press_pt;
-static lv_obj_t *s_pop, *s_pop_ta, *s_pop_subj_btns;
+static lv_obj_t *s_pop, *s_pop_ta, *s_pop_subj_ta, *s_pop_subj_btns;
 static int s_pop_ymd, s_pop_p;
-static char s_pop_subj[28];
 
 static void show_now(void);
+
+static void show_or_hide(lv_obj_t *o, bool show)
+{
+    if (show) {
+        lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+    }
+}
 
 static int week_day(int d)
 {
@@ -182,21 +191,13 @@ static void changed(void)
 {
     tt_grid_fill(&s_grid, s_sel);
     show_now();
-    int n = tt_week_changes(s_sel, ymd_week_monday());
-    if (n) {
-        char buf[32];
-        snprintf(buf, sizeof(buf), LV_SYMBOL_REFRESH " 되돌리기 %d", n);
-        label_set(lv_obj_get_child(s_undo_btn, 0), buf);
-        lv_obj_clear_flag(s_undo_btn, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_chg_hint, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_add_flag(s_undo_btn, LV_OBJ_FLAG_HIDDEN);
-        if (s_sel >= 0) {
-            lv_obj_clear_flag(s_chg_hint, LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_add_flag(s_chg_hint, LV_OBJ_FLAG_HIDDEN);
-        }
-    }
+    int n = s_sel >= 0 ? tt_week_changes(s_sel, ymd_week_monday()) : 0;
+    char buf[32];
+    snprintf(buf, sizeof(buf), "이번 주 모두 %d", n);
+    label_set(lv_obj_get_child(s_week_btn, 0), buf);
+    show_or_hide(s_week_btn, n > 0);
+    show_or_hide(s_undo_btn, tt_undo_count() > 0);
+    show_or_hide(s_chg_hint, s_sel >= 0 && !n && !tt_undo_count());
 }
 
 static void after_change(void)
@@ -208,6 +209,13 @@ static void after_change(void)
 static void on_undo_week(lv_event_t *e)
 {
     tt_restore_week(s_sel, ymd_week_monday());
+    after_change();
+}
+
+/* 방금 바꾼 것 하나를 되돌림 (교체·보강·원래대로 모두) */
+static void on_undo(lv_event_t *e)
+{
+    tt_undo();
     after_change();
 }
 
@@ -281,43 +289,56 @@ static void on_pop_restore(lv_event_t *e)
 
 static void on_pop_add(lv_event_t *e)
 {
-    if (!s_pop_subj[0]) {
+    char subj[28];
+    strlcpy(subj, lv_textarea_get_text(s_pop_subj_ta), sizeof(subj));
+    if (!subj[0]) {
+        lv_obj_set_style_border_color(s_pop_subj_ta, lv_color_hex(C_RED), 0);   /* 과목을 넣으라고 */
+        hkb_set_textarea(s_pop_subj_ta);
         return;
     }
-    tt_add_extra(s_sel, s_pop_ymd, s_pop_p, s_pop_subj, lv_textarea_get_text(s_pop_ta));
+    tt_add_extra(s_sel, s_pop_ymd, s_pop_p, subj, lv_textarea_get_text(s_pop_ta));
     pop_close();
     after_change();
 }
 
-static void pick_subj(lv_obj_t *b)
+static void mark_subj(void)
 {
-    strlcpy(s_pop_subj, lv_label_get_text(lv_obj_get_child(b, 0)), sizeof(s_pop_subj));
+    const char *cur = lv_textarea_get_text(s_pop_subj_ta);
     uint32_t n = lv_obj_get_child_cnt(s_pop_subj_btns);
     for (uint32_t i = 0; i < n; i++) {
         lv_obj_t *x = lv_obj_get_child(s_pop_subj_btns, i);
-        btn_set_on(x, x == b);
+        btn_set_on(x, !strcmp(lv_label_get_text(lv_obj_get_child(x, 0)), cur));
     }
 }
 
 static void on_pop_subj(lv_event_t *e)
 {
-    pick_subj(lv_event_get_target(e));
+    lv_obj_t *b = lv_event_get_target(e);
+    hkb_commit();
+    lv_textarea_set_text(s_pop_subj_ta, lv_label_get_text(lv_obj_get_child(b, 0)));
+    lv_obj_set_style_border_color(s_pop_subj_ta, lv_color_hex(C_LINE), 0);
+    mark_subj();
 }
 
 static void on_pop_room(lv_event_t *e)
 {
     lv_obj_t *b = lv_event_get_target(e);
+    hkb_commit();
     lv_textarea_set_text(s_pop_ta, lv_label_get_text(lv_obj_get_child(b, 0)));
 }
 
-static void on_pop_kb(lv_event_t *e)
+/* 글 상자를 누르면 자판이 그 상자로 */
+static void on_pop_focus(lv_event_t *e)
 {
-    lv_event_code_t code = lv_event_get_code(e);
-    if (code == LV_EVENT_READY) {
-        on_pop_add(e);
-    } else if (code == LV_EVENT_CANCEL) {
-        pop_close();
-    }
+    lv_obj_t *ta = lv_event_get_target(e);
+    hkb_set_textarea(ta);
+    lv_obj_set_style_border_color(s_pop_subj_ta, lv_color_hex(ta == s_pop_subj_ta ? C_ACCENT : C_LINE), 0);
+    lv_obj_set_style_border_color(s_pop_ta, lv_color_hex(ta == s_pop_ta ? C_ACCENT : C_LINE), 0);
+}
+
+static void on_pop_text(lv_event_t *e)
+{
+    mark_subj();
 }
 
 static lv_obj_t *pop_box(int h, const char *title)
@@ -327,7 +348,7 @@ static lv_obj_t *pop_box(int h, const char *title)
     lv_obj_set_style_bg_color(s_pop, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_pop, LV_OPA_70, 0);
     lv_obj_add_flag(s_pop, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_t *box = mk_card(s_pop, 112, 12, SCR_W - 224, h);
+    lv_obj_t *box = mk_card(s_pop, 40, 6, SCR_W - 80, h);
     mk_label(box, &font_kr_22, C_TEXT, title);
     return box;
 }
@@ -337,83 +358,126 @@ static void pop_title(int ymd, int p, const char *what, char *buf, size_t size)
     snprintf(buf, size, "%d/%d(%s) %d교시 %s", ymd / 100 % 100, ymd % 100, WEEKDAYS[ymd_wday(ymd)], p + 1, what);
 }
 
-/* 빈 칸: 보강 넣기. 과목은 그 선생님 시간표에 있는 과목 중에서, 교실은 숫자로 */
+static lv_obj_t *pop_ta(lv_obj_t *box, int x, int y, int w, const char *hint)
+{
+    lv_obj_t *ta = lv_textarea_create(box);
+    lv_textarea_set_one_line(ta, true);
+    lv_textarea_set_placeholder_text(ta, hint);
+    lv_textarea_set_max_length(ta, 10);
+    lv_obj_set_style_text_font(ta, &font_kr_22, 0);
+    lv_obj_set_style_bg_color(ta, lv_color_hex(C_CARD2), 0);
+    lv_obj_set_style_text_color(ta, lv_color_hex(C_TEXT), 0);
+    lv_obj_set_style_border_color(ta, lv_color_hex(C_LINE), 0);
+    lv_obj_set_size(ta, w, 46);
+    lv_obj_set_pos(ta, x, y);
+    lv_obj_add_event_cb(ta, on_pop_focus, LV_EVENT_CLICKED, NULL);
+    return ta;
+}
+
+static int cmp_str(const void *a, const void *b)
+{
+    return strcmp(*(const char *const *)a, *(const char *const *)b);
+}
+
+/* 빈 칸: 보강 넣기.
+ *  과목은 한글 자판으로 쓰거나, 아래 단추(이 선생님 과목 → 학교 전체 과목)에서 고름 */
+#define POP_W (SCR_W - 80 - 28)
 static void open_extra(int ymd, int p)
 {
     const teachers_t *ts = g_data.teachers;
     const teacher_t *t = &ts->t[s_sel];
     char title[64];
     pop_title(ymd, p, "보강 넣기", title, sizeof(title));
-    lv_obj_t *box = pop_box(250, title);
+    lv_obj_t *box = pop_box(296, title);
     s_pop_ymd = ymd;
     s_pop_p = p;
-    s_pop_subj[0] = 0;
 
     lv_obj_t *l = mk_label(box, &font_kr_18, C_DIM, "과목");
-    lv_obj_set_pos(l, 0, 44);
-    s_pop_subj_btns = mk_box(box, 56, 36, SCR_W - 224 - 28 - 56, 44);
-    lv_obj_set_flex_flow(s_pop_subj_btns, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_column(s_pop_subj_btns, 6, 0);
-    lv_obj_add_flag(s_pop_subj_btns, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_scroll_dir(s_pop_subj_btns, LV_DIR_HOR);
-    lv_obj_t *first = mk_btn(s_pop_subj_btns, "보강", &font_kr_18, on_pop_subj, NULL);
-    lv_obj_set_height(first, 40);
-    const char *seen[12];
-    int ns = 0;
-    const char *rooms[6];
+    lv_obj_set_pos(l, 0, 50);
+    s_pop_subj_ta = pop_ta(box, 48, 38, 220, "과목 쓰기");
+    l = mk_label(box, &font_kr_18, C_DIM, "교실");
+    lv_obj_set_pos(l, 290, 50);
+    s_pop_ta = pop_ta(box, 338, 38, 140, "(없어도 됨)");
+
+    /* 교실 단추: 이 선생님 교실 몇 개 */
+    const char *rooms[4];
     int nr = 0;
     for (int d = 0; d < TT_DAYS; d++) {
         for (int q = 0; q < TT_PERIODS; q++) {
-            const char *sj = t->subj[d][q], *rm = t->room[d][q];
-            bool dup = !sj[0];
-            for (int k = 0; k < ns && !dup; k++) {
-                dup = !strcmp(seen[k], sj);
-            }
-            if (!dup && ns < 12) {
-                seen[ns++] = sj;
-                lv_obj_t *b = mk_btn(s_pop_subj_btns, sj, &font_kr_18, on_pop_subj, NULL);
-                lv_obj_set_height(b, 40);
-            }
-            dup = !rm[0];
+            const char *rm = t->room[d][q];
+            bool dup = !rm[0];
             for (int k = 0; k < nr && !dup; k++) {
                 dup = !strcmp(rooms[k], rm);
             }
-            if (!dup && nr < 6) {
+            if (!dup && nr < 4) {
                 rooms[nr++] = rm;
             }
         }
     }
-    pick_subj(first);
-
-    l = mk_label(box, &font_kr_18, C_DIM, "교실");
-    lv_obj_set_pos(l, 0, 104);
-    s_pop_ta = lv_textarea_create(box);
-    lv_textarea_set_one_line(s_pop_ta, true);
-    lv_textarea_set_placeholder_text(s_pop_ta, "(없어도 됨)");
-    lv_obj_set_style_text_font(s_pop_ta, &font_kr_22, 0);
-    lv_obj_set_size(s_pop_ta, 160, 48);
-    lv_obj_set_pos(s_pop_ta, 56, 92);
     for (int k = 0; k < nr; k++) {
         lv_obj_t *b = mk_btn(box, rooms[k], &font_kr_18, on_pop_room, NULL);
-        lv_obj_set_size(b, 80, 40);
-        lv_obj_set_pos(b, 228 + k * 86, 96);
+        lv_obj_set_size(b, 76, 40);
+        lv_obj_set_pos(b, 490 + k * 82, 41);
+    }
+
+    /* 과목 단추: 이 선생님 과목, '보강', 그다음 학교 전체 과목 (가나다순) */
+    s_pop_subj_btns = mk_box(box, 0, 94, POP_W, 122);
+    lv_obj_set_flex_flow(s_pop_subj_btns, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_style_pad_column(s_pop_subj_btns, 6, 0);
+    lv_obj_set_style_pad_row(s_pop_subj_btns, 6, 0);
+    lv_obj_add_flag(s_pop_subj_btns, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(s_pop_subj_btns, LV_DIR_VER);
+    static const char *all[120];
+    int na = 0, mine = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        for (int ti = 0; ti < ts->count; ti++) {
+            if ((pass == 0) != (ti == s_sel)) {
+                continue;
+            }
+            for (int d = 0; d < TT_DAYS; d++) {
+                for (int q = 0; q < TT_PERIODS; q++) {
+                    const char *sj = ts->t[ti].subj[d][q];
+                    bool dup = !sj[0];
+                    for (int k = 0; k < na && !dup; k++) {
+                        dup = !strcmp(all[k], sj);
+                    }
+                    if (!dup && na < 120) {
+                        all[na++] = sj;
+                    }
+                }
+            }
+        }
+        if (pass == 0) {
+            mine = na;
+            all[na++] = "보강";
+        }
+    }
+    qsort(all + mine + 1, na - mine - 1, sizeof(all[0]), cmp_str);
+    for (int k = 0; k < na; k++) {
+        lv_obj_t *b = mk_btn(s_pop_subj_btns, all[k], &font_kr_18, on_pop_subj, NULL);
+        lv_obj_set_height(b, 38);
+        if (k > mine) {
+            lv_obj_set_style_text_color(lv_obj_get_child(b, 0), lv_color_hex(C_DIM), 0);   /* 다른 선생님 과목 */
+        }
     }
 
     lv_obj_t *b = mk_btn(box, "넣기", &font_kr_22, on_pop_add, NULL);
     btn_set_on(b, true);
-    lv_obj_set_size(b, 160, 48);
+    lv_obj_set_size(b, 160, 44);
     lv_obj_align(b, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
     b = mk_btn(box, "취소", &font_kr_22, on_pop_cancel, NULL);
-    lv_obj_set_size(b, 120, 48);
+    lv_obj_set_size(b, 120, 44);
     lv_obj_align(b, LV_ALIGN_BOTTOM_RIGHT, -172, 0);
+    l = mk_label(box, &font_kr_18, C_DIM, "과목 칸을 누르고 아래 자판으로 써도 됩니다");
+    lv_obj_align(l, LV_ALIGN_BOTTOM_LEFT, 0, -10);
 
-    lv_obj_t *kb = lv_keyboard_create(s_pop);
-    lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_NUMBER);
-    lv_obj_set_size(kb, SCR_W, 320);
+    lv_obj_t *kb = hkb_create(s_pop, on_pop_add);
+    lv_obj_set_size(kb, SCR_W, SCR_H - 310);
     lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_text_font(kb, &lv_font_montserrat_24, 0);
-    lv_keyboard_set_textarea(kb, s_pop_ta);
-    lv_obj_add_event_cb(kb, on_pop_kb, LV_EVENT_ALL, NULL);
+    hkb_set_textarea(s_pop_subj_ta);
+    lv_obj_add_event_cb(s_pop_subj_ta, on_pop_text, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_textarea_set_text(s_pop_subj_ta, mine > 0 ? all[0] : "보강");
+    lv_obj_set_style_border_color(s_pop_subj_ta, lv_color_hex(C_ACCENT), 0);
 }
 
 /* 바뀐 칸: 원래대로 (옮겨 간 빈 칸이면 보강도 넣을 수 있게) */
@@ -627,10 +691,14 @@ void find_build(lv_obj_t *page)
     lv_obj_align(s_owner_btn, LV_ALIGN_TOP_RIGHT, 0, -4);
     s_chg_hint = mk_label(right, &font_kr_18, C_DIM, "끌어서 교체 · 빈 칸은 보강");
     lv_obj_align(s_chg_hint, LV_ALIGN_TOP_RIGHT, -182, 6);
-    s_undo_btn = mk_btn(right, "", &font_kr_18, on_undo_week, NULL);
-    lv_obj_set_size(s_undo_btn, 150, 38);
+    lv_obj_set_width(s_title, 640 - 182 - 262);
+    lv_label_set_long_mode(s_title, LV_LABEL_LONG_DOT);
+    s_undo_btn = mk_btn(right, LV_SYMBOL_LEFT " 실행 취소", &font_kr_18, on_undo, NULL);
+    lv_obj_set_size(s_undo_btn, 126, 38);
     lv_obj_align(s_undo_btn, LV_ALIGN_TOP_RIGHT, -182, -4);
-    lv_obj_add_flag(s_undo_btn, LV_OBJ_FLAG_HIDDEN);
+    s_week_btn = mk_btn(right, "", &font_kr_18, on_undo_week, NULL);
+    lv_obj_set_size(s_week_btn, 126, 38);
+    lv_obj_align(s_week_btn, LV_ALIGN_TOP_RIGHT, -314, -4);
 
     lv_obj_t *bar = mk_box(right, 0, 40, lv_pct(100), 36);
     lv_obj_set_style_radius(bar, 10, 0);

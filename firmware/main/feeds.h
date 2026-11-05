@@ -156,3 +156,6 @@ void tt_restore(int ti, int ymd, int p);
 /* monday 부터 5일 동안 바뀐 칸 수 / 모두 원래대로 */
 int tt_week_changes(int ti, int monday);
 void tt_restore_week(int ti, int monday);
+/* 마지막으로 바꾼 것을 되돌림 (10번까지). 되돌릴 것이 없으면 false */
+bool tt_undo(void);
+int tt_undo_count(void);

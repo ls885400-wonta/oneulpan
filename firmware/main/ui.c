@@ -531,18 +531,19 @@ static void screen_power(void)
  *  IO 확장 칩의 ADC(10비트, 3.3V)에 배터리 전압이 1/3 로 나뉘어 들어옵니다.
  *  2.5V 아래면 배터리가 없는 것으로 보고 숨깁니다.
  *
- *  충전 여부를 알려 주는 핀이 없어서 전압으로 짐작합니다:
- *   - 충전기를 꽂으면 전압이 한 번에 오르고, 빼면 한 번에 내려갑니다
- *   - 다 차 가면 충전기가 4.17V 넘게 붙잡고 있습니다
- *   - 켤 때부터 꽂혀 있었으면 5분 사이 전압이 오르는지로
+ *  충전 여부를 알려 주는 핀이 없어서 전압이 흔들리는지로 짐작합니다.
+ *  재어 보니 충전기가 꽂혀 있으면 전압이 붙잡혀 거의 그대로(±5mV)이고,
+ *  배터리로만 돌면 화면·와이파이가 쓰는 만큼 5초마다 수십 mV 씩 오르내립니다.
+ *   - 20초(4번) 동안 15mV 안쪽으로 고르면 충전 중
+ *   - 30mV 넘게 흔들리면 충전 끝
  *   - 컴퓨터 USB(내장 USB 단자)에 붙어 있으면 충전 중 */
 
-#define BATT_JUMP 0.06f   /* 10초 사이 이만큼 오르면 꽂음, 내려가면 뺌 */
-#define BATT_HOLD 4.17f   /* 이 위면 충전기가 붙잡고 있는 것 */
-#define BATT_HIST 30      /* 10초 × 30 = 5분 전과 비교 */
-#define BATT_TREND 0.03f  /* 5분 사이 이만큼 오르면 충전 중, 내려가면 아님 */
+#define BATT_EVERY 5        /* 초마다 잼 */
+#define BATT_WIN 4          /* 이만큼 모아 흔들림을 봄 */
+#define BATT_STEADY 0.015f  /* 이 안쪽이면 충전기가 붙잡고 있는 것 */
+#define BATT_NOISY 0.030f   /* 이 넘게 흔들리면 배터리로만 */
 
-/* 지난 1시간 전압 기록 (10초마다, mV, 맨 윗비트 = 충전 중으로 봤음). 시리얼 "BATT" 로 받아 봄 */
+/* 지난 30분 전압 기록 (5초마다, mV, 맨 윗비트 = 충전 중으로 봤음). 시리얼 "BATT" 로 받아 봄 */
 #define BLOG_MAX 360
 static uint16_t s_blog[BLOG_MAX];
 static int s_blog_n;
@@ -569,44 +570,44 @@ static float batt_volts(void)
 
 static void battery(void)
 {
-    static int n;
-    static float last;
+    static int n, k;   /* k = 잰 횟수 */
     static bool charging, was;
-    if (n++ % 10) {
+    static float win[BATT_WIN];
+    if (n++ % BATT_EVERY) {
         return;
     }
     float v = batt_volts();
-    if (n == 1) {
+    k++;
+    if (k == 1) {
         ESP_LOGI("ui", "배터리 %.2fV", v);
-    } else if (last > 0) {
-        if (v - last >= BATT_JUMP) {
+    }
+    win[(k - 1) % BATT_WIN] = v;
+    if (k >= BATT_WIN) {
+        float lo = win[0], hi = win[0];
+        for (int i = 1; i < BATT_WIN; i++) {
+            lo = win[i] < lo ? win[i] : lo;
+            hi = win[i] > hi ? win[i] : hi;
+        }
+        if (!charging && hi - lo <= BATT_STEADY) {
             charging = true;
-        } else if (last - v >= BATT_JUMP) {
+        } else if (charging && hi - lo >= BATT_NOISY) {
             charging = false;
         }
     }
-    if (v >= BATT_HOLD) {
-        charging = true;
-    }
-    /* 켤 때부터 꽂혀 있었으면 오르는 낌새로: 5분 전보다 오르면 충전 중, 내리면 아님 */
-    static float hist[BATT_HIST];
-    static int hn;
-    float old = hist[hn % BATT_HIST];
-    if (hn >= BATT_HIST) {
-        if (v - old >= BATT_TREND) {
-            charging = true;
-        } else if (old - v >= BATT_TREND && v < BATT_HOLD) {
-            charging = false;
-        }
-    }
-    hist[hn++ % BATT_HIST] = v;
     s_blog[s_blog_n++ % BLOG_MAX] = (uint16_t)(v * 1000.0f) | (charging ? 0x8000 : 0);
     bool usb = usb_serial_jtag_is_connected();
     if (charging != was) {
         ESP_LOGI("ui", "배터리 %.2fV → %s", v, charging ? "충전 중" : "충전 끝");
         was = charging;
     }
-    last = v;
+
+    /* 보이는 % 는 최근 4번의 평균으로 (배터리로만 돌 때 흔들려서) */
+    int cnt = k < BATT_WIN ? k : BATT_WIN;
+    float avg = 0;
+    for (int i = 0; i < cnt; i++) {
+        avg += win[i];
+    }
+    v = avg / cnt;
 
     char buf[24] = "";
     uint32_t color = C_TEXT;
