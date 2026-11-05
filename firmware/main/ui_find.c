@@ -10,6 +10,8 @@
  */
 #include <stdlib.h>
 
+#include "esp_log.h"
+
 #include "hkb.h"
 #include "ui_priv.h"
 
@@ -171,7 +173,7 @@ static int s_last_min = -1;
 
 /* ---------------- 시간표 바꾸기: 끌어서 교체 · 눌러서 보강 ---------------- */
 
-static lv_obj_t *s_chg_hint, *s_week_btn, *s_undo_btn;
+static lv_obj_t *s_week_btn, *s_undo_btn;
 static lv_obj_t *s_ghost;              /* 끄는 동안 손가락을 따라다니는 칸 */
 static lv_obj_t *s_hover;              /* 놓을 칸 */
 static int s_drag_d = -1, s_drag_p;
@@ -206,8 +208,9 @@ static void changed(void)
     snprintf(buf, sizeof(buf), "이번 주 모두 %d", n);
     label_set(lv_obj_get_child(s_week_btn, 0), buf);
     show_or_hide(s_week_btn, n > 0);
-    show_or_hide(s_undo_btn, tt_undo_count() > 0);
-    show_or_hide(s_chg_hint, s_sel >= 0 && !n && !tt_undo_count());
+    /* 실행 취소는 늘 보이고, 되돌릴 것이 없으면 흐리게 */
+    show_or_hide(s_undo_btn, s_sel >= 0);
+    lv_obj_set_style_opa(s_undo_btn, tt_undo_count() > 0 ? LV_OPA_COVER : LV_OPA_40, 0);
 }
 
 static void after_change(void)
@@ -525,10 +528,14 @@ static void open_restore(int ymd, int p, int kind)
     }
 }
 
-/* 두 번 눌러 칸 비우기: 한 번 누른 것은 잠깐 기다렸다가 처리 */
-#define DOUBLE_MS 350
+/* 두 번 눌러 칸 비우기.
+ *  한 번 누른 것은 손을 뗀 뒤 DOUBLE_MS 동안 기다렸다가 처리하고,
+ *  그 사이 같은 칸을 다시 누르기 시작하면(뗄 때가 아니라 누를 때) 두 번 누른 것으로 봅니다. */
+#define DOUBLE_MS 500
 static lv_timer_t *s_tap_timer;
 static int s_tap_cell = -1;
+static uint32_t s_tap_ms;
+static bool s_double;
 
 static void on_tap(int d, int p);
 
@@ -542,21 +549,29 @@ static void on_tap_timer(lv_timer_t *t)
     }
 }
 
-static void on_click(int d, int p)
+/* 누르기 시작할 때: 기다리던 한 번 누름과 같은 칸이면 두 번 누름 */
+static void on_press_start(int d, int p)
 {
     int v = d * 10 + p;
-    if (s_tap_timer && s_tap_cell == v) {
+    s_double = s_tap_timer && s_tap_cell == v;
+    if (s_tap_timer) {
+        ESP_LOGI("find", "두 번째 누름까지 %lums%s", (unsigned long)lv_tick_elaps(s_tap_ms), s_double ? " → 비우기" : "");
         lv_timer_del(s_tap_timer);
         s_tap_timer = NULL;
         s_tap_cell = -1;
+    }
+}
+
+static void on_click(int d, int p)
+{
+    if (s_double) {
+        s_double = false;
         tt_clear(s_sel, week_day(d), p);
         after_change();
         return;
     }
-    if (s_tap_timer) {
-        lv_timer_del(s_tap_timer);   /* 다른 칸을 눌렀으면 앞 것은 버림 */
-    }
-    s_tap_cell = v;
+    s_tap_cell = d * 10 + p;
+    s_tap_ms = lv_tick_get();
     s_tap_timer = lv_timer_create(on_tap_timer, DOUBLE_MS, NULL);
     lv_timer_set_repeat_count(s_tap_timer, 1);
 }
@@ -590,6 +605,7 @@ static void on_grid_cell(lv_event_t *e)
     bool ok = ts && s_sel >= 0 && s_sel < ts->count;
 
     if (code == LV_EVENT_PRESSED) {
+        on_press_start(d, p);
         s_drag_d = d;
         s_drag_p = p;
         s_dragging = s_dragged = false;
@@ -747,8 +763,6 @@ void find_build(lv_obj_t *page)
     s_owner_btn = mk_btn(right, "", &font_kr_18, on_owner, NULL);
     lv_obj_set_size(s_owner_btn, 170, 38);
     lv_obj_align(s_owner_btn, LV_ALIGN_TOP_RIGHT, 0, -4);
-    s_chg_hint = mk_label(right, &font_kr_18, C_DIM, "끌어서 교체 · 빈 칸은 보강");
-    lv_obj_align(s_chg_hint, LV_ALIGN_TOP_RIGHT, -182, 6);
     lv_obj_set_width(s_title, 640 - 182 - 262);
     lv_label_set_long_mode(s_title, LV_LABEL_LONG_DOT);
     s_undo_btn = mk_btn(right, LV_SYMBOL_LEFT " 실행 취소", &font_kr_18, on_undo, NULL);
