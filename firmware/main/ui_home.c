@@ -18,7 +18,7 @@
 #define RIGHT_X (PAD + LEFT_W + PAD)
 #define CLOCK_H 150
 #define ROW2_Y (PAD + CLOCK_H + PAD)
-#define ROW2_H 230
+#define ROW2_H 240         /* 수업 안내 칸을 줄인 만큼 날씨·내 일정을 키움 */
 #define WEATHER_W 330
 #define MEAL_Y (ROW2_Y + ROW2_H + PAD)
 #define MEAL_H 124
@@ -199,7 +199,7 @@ static void build_next(lv_obj_t *page)
     lv_obj_set_style_bg_color(c, lv_color_hex(NEXT_BG), 0);
     lv_obj_set_style_border_color(c, lv_color_hex(NEXT_FG), 0);
     lv_obj_set_style_border_width(c, 2, 0);
-    s_next_text = mk_label(c, &font_kr_26, NEXT_FG, "");
+    s_next_text = mk_label(c, &font_kr_22, NEXT_FG, "");
     lv_label_set_recolor(s_next_text, true);
     lv_label_set_long_mode(s_next_text, LV_LABEL_LONG_DOT);
     lv_obj_set_width(s_next_text, LEFT_W - 28);

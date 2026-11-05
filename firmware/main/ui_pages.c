@@ -1,7 +1,7 @@
 /* 달력 · 목록 화면들: 학교일정(한 달) · 창체계획 · 캘린더(5주) · 급식
  *
- *  달력 칸에는 일정 몇 줄과 "+n건 더". 칸을 누르면 그날 일정을 다 보여 줍니다
- *  (학교일정은 오른쪽 칸에, 나머지는 창으로).
+ *  달력 칸에는 일정 몇 줄과 "+n건 더" (학교일정은 건수만).
+ *  칸을 누르면 그날 일정을 다 보여 줍니다 (학교일정은 오른쪽 칸에, 나머지는 창으로).
  */
 #include <stdlib.h>
 
@@ -113,10 +113,7 @@ static void day_text(int kind, int ymd, char *buf, size_t size)
     } else if (kind == GK_CAL) {
         o = add_cal(buf, o, size, g_data.mycal, ymd, C_SKY);
     } else {
-        if (g_data.cha && g_data.cha->is_cal) {
-            o = add_cal(buf, o, size, &g_data.cha->cal, ymd, C_GREEN);
-        }
-        o = add_school(buf, o, size, ymd, true);
+        o = add_school(buf, o, size, ymd, true); /* 창체: 학교 일정 가운데 창체 일정만 (캘린더는 넣지 않음) */
     }
     if (!o) {
         strlcpy(buf, "#AEBBD2 일정이 없습니다.#", size);
@@ -131,6 +128,7 @@ static void day_text(int kind, int ymd, char *buf, size_t size)
 typedef struct {
     int first, weeks, days, lines, month, kind;
     int cw;
+    bool count_only;                /* 칸에 일정 대신 "n건" 만 */
     lv_obj_t *cell[GRID_MAX];
     lv_obj_t *last[GRID_MAX];
     int used[GRID_MAX], extra[GRID_MAX];
@@ -168,6 +166,7 @@ static void grid_build(week_grid_t *g, lv_obj_t *box, int w, int h, int first, i
     g->days = days;
     g->month = month;
     g->kind = kind;
+    g->count_only = kind == GK_SCHOOL;
     g->cw = (w - gap * (days - 1)) / days;
     int ch = (h - hh - gap * (weeks - 1)) / weeks;
     g->lines = (ch - 28) / GRID_LINE_H;
@@ -233,7 +232,7 @@ static void grid_add(week_grid_t *g, int ymd, const char *text, uint32_t color)
         return;
     }
     int i = k / 7 * g->days + k % 7;
-    if (g->used[i] >= g->lines) {
+    if (g->count_only || g->used[i] >= g->lines) {
         g->extra[i]++;
         return;
     }
@@ -251,7 +250,12 @@ static int grid_finish(week_grid_t *g)
     int total = 0;
     for (int i = 0; i < g->weeks * g->days; i++) {
         total += g->used[i] + g->extra[i];
-        if (g->extra[i] && g->last[i]) {
+        if (g->count_only && g->extra[i]) {
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%d건", g->extra[i]);
+            lv_obj_t *l = mk_label(g->cell[i], &font_kr_22, C_SKY, buf);
+            lv_obj_align(l, LV_ALIGN_CENTER, 0, 10);
+        } else if (g->extra[i] && g->last[i]) {
             char buf[24];
             snprintf(buf, sizeof(buf), "+%d건 더", g->extra[i] + 1);
             lv_label_set_text(g->last[i], buf);
@@ -301,7 +305,7 @@ static void grid_add_school(week_grid_t *g, bool cha_only)
 /* ---------------- 학교일정: 한 달 달력 + 오른쪽에 고른 날 ----------------
  *  2026년 11월  ●휴일 ●시험 ●행사 ●기타 ●업무      [< 이전달] [오늘] [다음달 >] */
 
-#define DET_W 300
+#define DET_W 400
 #define SB_W (INNER_W - DET_W - 12)
 #define SB_H (BODY_H - 28 - 42)
 static week_grid_t s_school_grid;
@@ -406,8 +410,8 @@ void school_refresh(void)
 }
 
 /* ---------------- 창체계획 ----------------
- *  구글 시트면 그 표를 그대로, 캘린더면 4주 달력 표.
- *  학교 일정 가운데 동아리·자율·진로·봉사 같은 창체 일정도 달력에 함께 넣습니다. */
+ *  구글 시트면 그 표를 그대로, 아니면 4주 달력 표에
+ *  학교 일정 가운데 동아리·자율·진로·봉사 같은 창체 일정만 (캘린더 일정은 넣지 않음). */
 
 #define CHA_WEEKS 4
 static week_grid_t s_cha_grid;
@@ -477,16 +481,11 @@ void cha_refresh(void)
     }
     week_grid_t *g = &s_cha_grid;
     grid_build(g, s_cha, INNER_W, LIST_H, ymd_week_monday(), CHA_WEEKS, 5, 0, GK_CHA, 0);
-    if (c) {
-        grid_add_cal(g, &c->cal, C_TEXT);
-    }
     grid_add_school(g, true);
     int n = grid_finish(g);
     const char *hint = "칸을 누르면 자세히";
-    if (!g_cfg.cha_url[0] && !n) {
-        hint = "설치 페이지에서 창체 계획 주소를 넣어 주세요";
-    } else if (g_cfg.cha_url[0] && !c) {
-        hint = "창체 계획을 받는 중…";
+    if (!g_data.school) {
+        hint = "학교 일정을 받는 중…";
     } else if (!n) {
         hint = "앞으로 4주 동안 창체 일정이 없습니다";
     }

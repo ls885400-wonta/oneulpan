@@ -7,6 +7,7 @@
 
 #include <stdlib.h>
 
+#include "driver/usb_serial_jtag.h"
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
 #include "io_extension.h"
@@ -440,11 +441,11 @@ static void bar_build(lv_obj_t *scr)
     s_date = mk_label(s_bar, &font_kr_18, C_DIM, "");
     lv_obj_align(s_date, LV_ALIGN_TOP_RIGHT, -14, 40);
     s_batt = mk_label(s_bar, &font_kr_18, C_TEXT, "");
-    lv_obj_set_width(s_batt, 74);
+    lv_obj_set_width(s_batt, 96);
     lv_obj_set_style_text_align(s_batt, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_align(s_batt, LV_ALIGN_RIGHT_MID, -136, 0);
     s_status = mk_label(s_bar, &font_kr_18, C_GREEN, LV_SYMBOL_WIFI);
-    lv_obj_align(s_status, LV_ALIGN_RIGHT_MID, -216, 0);
+    lv_obj_align(s_status, LV_ALIGN_RIGHT_MID, -238, 0);
     bar_name();
 }
 
@@ -528,19 +529,68 @@ static void screen_power(void)
 
 /* ---------------- 배터리 ----------------
  *  IO 확장 칩의 ADC(10비트, 3.3V)에 배터리 전압이 1/3 로 나뉘어 들어옵니다.
- *  2.5V 아래면 배터리가 없는 것으로 보고 숨깁니다. */
+ *  2.5V 아래면 배터리가 없는 것으로 보고 숨깁니다.
+ *
+ *  충전 여부를 알려 주는 핀이 없어서 전압으로 짐작합니다:
+ *   - 충전기를 꽂으면 전압이 한 번에 오르고, 빼면 한 번에 내려갑니다
+ *   - 다 차 가면 충전기가 4.17V 넘게 붙잡고 있습니다
+ *   - 켤 때부터 꽂혀 있었으면 5분 사이 전압이 오르는지로
+ *   - 컴퓨터 USB(내장 USB 단자)에 붙어 있으면 충전 중 */
+
+#define BATT_JUMP 0.06f   /* 10초 사이 이만큼 오르면 꽂음, 내려가면 뺌 */
+#define BATT_HOLD 4.17f   /* 이 위면 충전기가 붙잡고 있는 것 */
+#define BATT_HIST 30      /* 10초 × 30 = 5분 전과 비교 */
+#define BATT_TREND 0.03f  /* 5분 사이 이만큼 오르면 충전 중, 내려가면 아님 */
+
+static float batt_volts(void)
+{
+    uint32_t sum = 0;
+    for (int i = 0; i < 8; i++) {
+        sum += IO_EXTENSION_Adc_Input();
+    }
+    return sum / 8.0f * 3.3f * 3.0f / 1023.0f;
+}
 
 static void battery(void)
 {
     static int n;
-    if (n++ % 30) {
+    static float last;
+    static bool charging, was;
+    if (n++ % 10) {
         return;
     }
-    uint16_t raw = IO_EXTENSION_Adc_Input();
-    float v = raw * 3.3f * 3.0f / 1023.0f;
+    float v = batt_volts();
     if (n == 1) {
-        ESP_LOGI("ui", "배터리 ADC %u -> %.2fV", raw, v);
+        ESP_LOGI("ui", "배터리 %.2fV", v);
+    } else if (last > 0) {
+        if (v - last >= BATT_JUMP) {
+            charging = true;
+        } else if (last - v >= BATT_JUMP) {
+            charging = false;
+        }
     }
+    if (v >= BATT_HOLD) {
+        charging = true;
+    }
+    /* 켤 때부터 꽂혀 있었으면 오르는 낌새로: 5분 전보다 오르면 충전 중, 내리면 아님 */
+    static float hist[BATT_HIST];
+    static int hn;
+    float old = hist[hn % BATT_HIST];
+    if (hn >= BATT_HIST) {
+        if (v - old >= BATT_TREND) {
+            charging = true;
+        } else if (old - v >= BATT_TREND && v < BATT_HOLD) {
+            charging = false;
+        }
+    }
+    hist[hn++ % BATT_HIST] = v;
+    bool usb = usb_serial_jtag_is_connected();
+    if (charging != was) {
+        ESP_LOGI("ui", "배터리 %.2fV → %s", v, charging ? "충전 중" : "충전 끝");
+        was = charging;
+    }
+    last = v;
+
     char buf[24] = "";
     uint32_t color = C_TEXT;
     if (v >= 2.5f && v < 5.5f) {
@@ -548,8 +598,9 @@ static void battery(void)
         pct = pct < 0 ? 0 : pct > 100 ? 100 : pct;
         const char *sym = pct > 80 ? LV_SYMBOL_BATTERY_FULL : pct > 55 ? LV_SYMBOL_BATTERY_3
                         : pct > 30 ? LV_SYMBOL_BATTERY_2 : pct > 10 ? LV_SYMBOL_BATTERY_1 : LV_SYMBOL_BATTERY_EMPTY;
-        snprintf(buf, sizeof(buf), "%s %d%%", sym, pct);
-        color = pct <= 20 ? C_RED : C_GREEN;
+        bool chg = charging || usb;
+        snprintf(buf, sizeof(buf), "%s%s %d%%", chg ? LV_SYMBOL_CHARGE " " : "", sym, pct);
+        color = chg ? C_GREEN : pct <= 20 ? C_RED : C_GREEN;
     }
     if (strcmp(buf, g_batt_text)) {
         strlcpy(g_batt_text, buf, sizeof(g_batt_text));
